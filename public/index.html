@@ -2,95 +2,162 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f4f0e8" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#131210" media="(prefers-color-scheme: dark)">
   <title>Clearance Checker</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M3 6.5A3.5 3.5 0 0 1 6.5 3h9.6a3.5 3.5 0 0 1 2.5 1l9.4 9.4a3.5 3.5 0 0 1 0 5L19.4 26.6a3.5 3.5 0 0 1-5 0L4 16.6a3.5 3.5 0 0 1-1-2.5z' fill='%23ff5a1f'/%3E%3Ccircle cx='9.5' cy='9.5' r='2.4' fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Geist:wght@400..700&family=Geist+Mono:wght@400..600&display=swap">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header>
-    <h1>Clearance Checker</h1>
-    <div class="auth">
-      <span id="auth-status" class="pill">Checking login…</span>
-      <button id="login" type="button" class="secondary">Log in with Discord</button>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M3 6.5A3.5 3.5 0 0 1 6.5 3h9.6a3.5 3.5 0 0 1 2.5 1l9.4 9.4a3.5 3.5 0 0 1 0 5L19.4 26.6a3.5 3.5 0 0 1-5 0L4 16.6a3.5 3.5 0 0 1-1-2.5z"/>
+        <circle cx="9.5" cy="9.5" r="2.4"/>
+      </svg>
+      <div>
+        <div class="brand-name">Clearance Checker</div>
+        <div class="brand-sub">Discord deals, real prices near you</div>
+      </div>
+    </div>
+
+    <div class="topbar-actions">
+      <div class="area-anchor">
+        <button id="area-chip" class="chip" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="area-panel">
+          <span class="icon" data-icon="pin"></span>
+          <span id="area-chip-text">Set search area</span>
+          <span class="icon chev" data-icon="chevron"></span>
+        </button>
+
+        <div id="area-panel" class="popover" role="dialog" aria-labelledby="area-title" hidden>
+          <div class="popover-head">
+            <div>
+              <p class="eyebrow">Search area</p>
+              <h2 id="area-title">Where do you shop?</h2>
+            </div>
+            <button id="area-close" class="icon-btn" type="button" aria-label="Close"><span class="icon" data-icon="x"></span></button>
+          </div>
+          <form id="area-form">
+            <label for="place">ZIP code, city, or address</label>
+            <div class="field-row">
+              <input id="place" type="text" autocomplete="postal-code" placeholder="e.g. 78701 or Austin, TX">
+              <button id="area-set" class="btn btn-ink" type="submit">Set</button>
+            </div>
+            <button id="use-location" class="btn btn-ghost btn-block" type="button"><span class="icon" data-icon="locate"></span> Use my current location</button>
+
+            <div class="radius">
+              <div class="radius-head">
+                <label for="radius">How far will you drive?</label>
+                <output id="radius-value" for="radius">50 mi</output>
+              </div>
+              <input id="radius" type="range" min="10" max="80" step="10" value="50">
+              <div class="radius-ticks" aria-hidden="true"><span>10</span><span>20</span><span>30</span><span>40</span><span>50</span><span>60</span><span>70</span><span>80</span></div>
+            </div>
+          </form>
+          <p id="area-status" class="field-status" role="status"></p>
+          <p class="fine">Saves as you go. The site checks up to the 50 closest stores inside your radius.</p>
+        </div>
+      </div>
+
+      <div class="auth">
+        <span id="auth-status" class="status-chip"><span class="dot"></span><span class="label">Checking login…</span></span>
+        <button id="login" type="button" class="btn btn-discord">Log in with Discord</button>
+      </div>
     </div>
   </header>
 
-  <div id="login-panel" class="banner" role="status" hidden>
-    <div>
-      <strong>Finish logging in in the Chrome window that just opened on this computer.</strong>
-      <ul>
-        <li>Sign in to Discord. Scanning the QR code with the Discord app on your phone is quickest.</li>
-        <li>Click <em>Authorize</em> if Discord asks. The bar saying Chrome is "controlled by automated test software" is normal.</li>
-        <li>The window closes by itself when you're done.</li>
-      </ul>
-    </div>
-    <button id="login-cancel" type="button" class="secondary">Cancel</button>
-  </div>
-
   <main>
-    <section class="area" aria-labelledby="area-title">
-      <div id="area-summary" class="area-summary" hidden>
-        <span><strong>Search area:</strong> <span id="area-text"></span> <span id="area-saved" class="saved" hidden>Saved ✓</span></span>
-        <button id="area-change" type="button" class="link">Change</button>
-      </div>
-      <div id="area-editor">
-        <h2 id="area-title">Where should it look?</h2>
-        <form id="area-form">
-          <div class="field grow">
-            <label for="place">Location</label>
-            <div class="inline">
-              <input id="place" type="text" inputmode="text" autocomplete="postal-code" placeholder="ZIP, city, or address">
-              <button id="area-set" type="submit">Set</button>
-              <button id="use-location" type="button" class="secondary">Use my location</button>
-            </div>
+    <section class="composer" aria-labelledby="composer-title">
+      <div id="composer-full">
+        <p class="eyebrow">New post</p>
+        <h1 id="composer-title">What's on clearance?</h1>
+        <p class="lede">Copy a deal post in Discord, then hit the button. Every link gets checked against stores near you.</p>
+        <div class="composer-actions">
+          <button type="button" class="btn btn-primary btn-xl js-paste">
+            <span class="icon" data-icon="clipboard"></span> Paste &amp; check
+          </button>
+          <button id="type-toggle" type="button" class="btn btn-ghost">Or type / paste it below</button>
+        </div>
+        <div id="post-editor" hidden>
+          <label for="post" class="visually-hidden">Discord post</label>
+          <textarea id="post" rows="7" placeholder="Paste a Discord post here…"></textarea>
+          <div class="editor-actions">
+            <button id="check" type="button" class="btn btn-ink">Check links</button>
+            <span class="fine"><kbd>Ctrl</kbd> + <kbd>Enter</kbd></span>
           </div>
-          <div class="field">
-            <label for="radius">Radius <output id="radius-value" for="radius"></output></label>
-            <input id="radius" type="range" min="10" max="80" step="10" value="50">
-          </div>
-        </form>
-        <p id="area-status" class="sub field-status" role="status"></p>
-        <p class="sub hint">The radius saves when you let go of the slider. The site checks up to the 50 closest stores inside it.</p>
+        </div>
       </div>
+
+      <div id="composer-compact" class="composer-compact" hidden>
+        <div class="compact-info">
+          <span class="icon" data-icon="message"></span>
+          <span id="post-summary-text"></span>
+          <button id="post-edit" type="button" class="link-btn">Edit post</button>
+        </div>
+        <div class="compact-actions">
+          <button id="stop" type="button" class="btn btn-danger" hidden><span class="icon" data-icon="stop"></span> <span class="label">Stop after this item</span></button>
+          <button type="button" class="btn btn-primary js-paste"><span class="icon" data-icon="clipboard"></span> Paste new post</button>
+        </div>
+      </div>
+
+      <div id="message" class="toast" role="status" aria-live="polite" hidden></div>
     </section>
 
-    <section class="input">
-      <div id="post-summary" class="post-summary" hidden>
-        <span id="post-summary-text"></span>
-        <button id="post-edit" type="button" class="link">Edit post</button>
-      </div>
-      <div id="post-editor">
-        <label for="post">Discord post</label>
-        <textarea id="post" rows="8" placeholder="Paste a Discord post here…"></textarea>
-      </div>
-      <div class="actions">
-        <button id="paste-check" type="button">Paste &amp; check</button>
-        <button id="check" type="button" class="secondary">Check links</button>
-        <button id="stop" type="button" class="danger" hidden>Stop after this item</button>
-        <span class="sub keys" id="keys-hint">or press Ctrl+Enter in the box</span>
-      </div>
-      <div id="message" class="message" role="status" aria-live="polite"></div>
+    <section id="onboarding" class="onboarding" aria-label="How it works">
+      <ol>
+        <li>
+          <span class="step-num">1</span>
+          <div><strong>Log in once</strong><span>A Chrome window opens. Sign in to Discord and approve the site.</span></div>
+        </li>
+        <li>
+          <span class="step-num">2</span>
+          <div><strong>Set where you shop</strong><span>Your ZIP and how far you'll drive.</span></div>
+        </li>
+        <li>
+          <span class="step-num">3</span>
+          <div><strong>Paste &amp; check</strong><span>See the best local price and your profit for every link.</span></div>
+        </li>
+      </ol>
     </section>
 
-    <section id="results-section" hidden>
-      <div class="results-bar">
-        <span id="results-title" class="sub"></span>
-        <button id="check-remaining" type="button" class="secondary" hidden></button>
+    <section id="results-section" aria-labelledby="results-title" hidden>
+      <div class="stats" id="stats"></div>
+
+      <div class="results-head">
+        <div>
+          <h2 id="results-title">Results</h2>
+          <p id="results-sub" class="fine"></p>
+        </div>
+        <button id="check-remaining" type="button" class="btn btn-ghost" hidden></button>
       </div>
-      <table id="results">
-        <thead>
-          <tr>
-            <th>Item</th>
-            <th>Posted</th>
-            <th>Best near you</th>
-            <th>Resell</th>
-            <th>Est. profit</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+      <div class="progress" id="progress" hidden><span></span></div>
+
+      <ol id="cards" class="cards"></ol>
     </section>
   </main>
+
+  <dialog id="login-dialog" aria-labelledby="login-title">
+    <div class="dialog-body">
+      <div class="dialog-art" aria-hidden="true"><span class="icon" data-icon="login"></span></div>
+      <h2 id="login-title">Finish logging in over in Chrome</h2>
+      <p class="lede">A Chrome window just opened on this computer.</p>
+      <ol class="steps">
+        <li>Sign in to Discord. Scanning the QR code with the Discord app on your phone is quickest.</li>
+        <li>Click <strong>Authorize</strong> if Discord asks.</li>
+        <li>The window closes by itself when you're done.</li>
+      </ol>
+      <p class="fine">The bar saying Chrome is "controlled by automated test software" is normal.</p>
+      <div class="dialog-foot">
+        <span class="waiting"><span class="spinner"></span> Waiting for you…</span>
+        <button id="login-cancel" type="button" class="btn btn-ghost">Cancel</button>
+      </div>
+    </div>
+  </dialog>
 
   <script src="app.js" type="module"></script>
 </body>

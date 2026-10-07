@@ -3,33 +3,37 @@ const $ = (sel) => document.querySelector(sel);
 const els = {
   authStatus: $('#auth-status'),
   login: $('#login'),
-  loginPanel: $('#login-panel'),
+  loginDialog: $('#login-dialog'),
   loginCancel: $('#login-cancel'),
-  areaSummary: $('#area-summary'),
-  areaText: $('#area-text'),
-  areaSaved: $('#area-saved'),
-  areaChange: $('#area-change'),
-  areaEditor: $('#area-editor'),
+  areaChip: $('#area-chip'),
+  areaChipText: $('#area-chip-text'),
+  areaPanel: $('#area-panel'),
+  areaClose: $('#area-close'),
   areaForm: $('#area-form'),
+  areaSet: $('#area-set'),
   areaStatus: $('#area-status'),
   place: $('#place'),
   radius: $('#radius'),
   radiusValue: $('#radius-value'),
   useLocation: $('#use-location'),
-  postSummary: $('#post-summary'),
-  postSummaryText: $('#post-summary-text'),
-  postEdit: $('#post-edit'),
+  composer: $('.composer'),
+  composerFull: $('#composer-full'),
+  composerCompact: $('#composer-compact'),
+  typeToggle: $('#type-toggle'),
   postEditor: $('#post-editor'),
   post: $('#post'),
-  pasteCheck: $('#paste-check'),
   check: $('#check'),
+  postSummaryText: $('#post-summary-text'),
+  postEdit: $('#post-edit'),
   stop: $('#stop'),
-  keysHint: $('#keys-hint'),
   message: $('#message'),
+  onboarding: $('#onboarding'),
   resultsSection: $('#results-section'),
-  resultsTitle: $('#results-title'),
+  resultsSub: $('#results-sub'),
+  stats: $('#stats'),
+  progress: $('#progress'),
   checkRemaining: $('#check-remaining'),
-  tbody: $('#results tbody'),
+  cards: $('#cards'),
 };
 
 const APP_TITLE = 'Clearance Checker';
@@ -42,12 +46,52 @@ const STOP_CODES = new Set([
 ]);
 const LOGIN_CODES = new Set(['needs_login', 'not_authorized', 'login_loop', 'unexpected_oauth_app', 'login_timeout']);
 
+const RETAILERS = {
+  target: ['Target', '#cc0000'],
+  walmart: ['Walmart', '#0071dc'],
+  homedepot: ['Home Depot', '#f96302'],
+  bestbuy: ['Best Buy', '#0046be'],
+  costco: ['Costco', '#e31837'],
+  samsclub: ["Sam's Club", '#0067a0'],
+};
+
 let auth = 'unknown';
 let area = null;
-let editingArea = false;
 let batch = null; // { postText, pastedAt, items, states, restored }
 let running = false;
 let stopRequested = false;
+let editingPost = false;
+let runProgress = null; // { done, total }
+
+// ---------- icons ----------
+
+const ICONS = {
+  pin: '<path d="M12 21s-7-6.1-7-11.2A7 7 0 0 1 19 9.8C19 14.9 12 21 12 21z"/><circle cx="12" cy="10" r="2.6"/>',
+  chevron: '<path d="M6 9l6 6 6-6"/>',
+  x: '<path d="M6 6l12 12M18 6L6 18"/>',
+  locate: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
+  clipboard: '<rect x="5" y="5" width="14" height="16" rx="2.5"/><path d="M9 5V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1"/><path d="M9 11h6M9 15h4"/>',
+  message: '<path d="M4 5h16v11H9l-5 4z"/>',
+  stop: '<rect x="7" y="7" width="10" height="10" rx="1.5"/>',
+  login: '<path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4"/><path d="M9 16l4-4-4-4M13 12H3"/>',
+  check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  alert: '<path d="M10.3 4L2.5 18a2 2 0 0 0 1.7 3h15.6a2 2 0 0 0 1.7-3L13.7 4a2 2 0 0 0-3.4 0z"/><path d="M12 9.5v4M12 17h.01"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  refresh: '<path d="M20 11A8 8 0 0 0 5.6 6.4L3 9M3 4v5h5M4 13a8 8 0 0 0 14.4 4.6L21 15M21 20v-5h-5"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  store: '<path d="M4 9l1.5-5h13L20 9M4 9v11h16V9M4 9h16M10 20v-5h4v5"/>',
+  play: '<path d="M8 5v14l11-7z"/>',
+};
+
+function icon(name) {
+  const span = document.createElement('span');
+  span.className = 'icon';
+  span.setAttribute('aria-hidden', 'true');
+  span.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[name] || ''}</svg>`;
+  return span;
+}
+
+for (const node of document.querySelectorAll('[data-icon]')) node.replaceWith(Object.assign(icon(node.dataset.icon), { className: node.className }));
 
 // ---------- helpers ----------
 
@@ -56,6 +100,7 @@ function el(tag, attrs = {}, ...children) {
   for (const [key, value] of Object.entries(attrs)) {
     if (value == null || value === false) continue;
     if (key === 'class') node.className = value;
+    else if (key === 'style') node.setAttribute('style', value);
     else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
     else node.setAttribute(key, value === true ? '' : value);
   }
@@ -65,13 +110,13 @@ function el(tag, attrs = {}, ...children) {
   return node;
 }
 
-function money(n) {
+function money(n, digits = 2) {
   if (typeof n !== 'number' || !Number.isFinite(n)) return '–';
-  return `${n < 0 ? '-' : ''}$${Math.abs(n).toFixed(2)}`;
+  return `${n < 0 ? '-' : ''}$${Math.abs(n).toFixed(digits)}`;
 }
 
-function signedMoney(n) {
-  return typeof n === 'number' && n > 0 ? `+${money(n)}` : money(n);
+function signedMoney(n, digits = 2) {
+  return typeof n === 'number' && n > 0 ? `+${money(n, digits)}` : money(n, digits);
 }
 
 function clock(iso) {
@@ -80,6 +125,17 @@ function clock(iso) {
 
 function plural(n, word) {
   return `${n} ${word}${n === 1 ? '' : 's'}`;
+}
+
+function shortPlace(a) {
+  const address = a?.location?.address || '';
+  // "78701, Austin, Travis County, Texas" -> "78701, Austin"
+  return address.split(',').slice(0, 2).join(',').trim() || `${a.location.lat.toFixed(2)}, ${a.location.lng.toFixed(2)}`;
+}
+
+function describeArea(a) {
+  if (!a?.location) return null;
+  return `${a.radiusMiles} mi around ${a.location.address || shortPlace(a)}`;
 }
 
 async function api(path, body) {
@@ -104,14 +160,23 @@ async function api(path, body) {
 // A message with an optional action button, e.g. "You're logged out. [Log in with Discord]".
 function actionFor(code) {
   if (LOGIN_CODES.has(code)) return { label: 'Log in with Discord', run: login };
-  if (code === 'no_location') return { label: 'Set search area', run: () => openAreaEditor(true) };
+  if (code === 'no_location') return { label: 'Set search area', run: () => openArea(true) };
   return null;
 }
 
+const TONE_ICONS = { good: 'check', bad: 'alert', warn: 'alert', '': 'info' };
+
 function setMessage(text, tone = '', action = null) {
-  els.message.replaceChildren(el('span', {}, text));
-  if (action) els.message.append(el('button', { type: 'button', class: 'secondary small', onclick: action.run }, action.label));
-  els.message.className = `message ${tone}`;
+  if (!text) {
+    els.message.hidden = true;
+    return;
+  }
+  els.message.hidden = false;
+  els.message.className = `toast ${tone}`;
+  els.message.replaceChildren(icon(TONE_ICONS[tone] || 'info'), el('span', { class: 'text' }, text));
+  if (action) {
+    els.message.append(el('button', { type: 'button', class: `btn btn-sm ${LOGIN_CODES.has(action.code) ? 'btn-discord' : 'btn-ink'}`, onclick: action.run }, action.label));
+  }
 }
 
 function errorText(err) {
@@ -128,15 +193,17 @@ const AUTH_LABELS = {
   saved: ['Login saved', 'ok'],
   signed_out: ['Logged out', 'bad'],
   unknown: ['Checking login…', ''],
+  offline: ['App not running', 'bad'],
 };
 
 function showAuth() {
   const [label, tone] = AUTH_LABELS[auth] || AUTH_LABELS.unknown;
-  els.authStatus.textContent = label;
-  els.authStatus.className = `pill ${tone}`;
+  els.authStatus.className = `status-chip ${tone}`;
+  els.authStatus.querySelector('.label').textContent = label;
   const loggedIn = auth === 'signed_in' || auth === 'saved';
   els.login.textContent = loggedIn ? 'Re-login' : 'Log in with Discord';
-  els.login.className = loggedIn ? 'link' : '';
+  els.login.className = loggedIn ? 'btn btn-quiet btn-sm' : 'btn btn-discord';
+  showOnboarding();
 }
 
 async function refreshStatus(tries = 10) {
@@ -145,12 +212,12 @@ async function refreshStatus(tries = 10) {
     if (status.browserError) setMessage(status.browserError, 'bad');
     if (!(running && status.auth === 'unknown')) auth = status.auth;
     showAuth();
-    if (status.loggingIn) els.loginPanel.hidden = false;
+    if (status.loggingIn && !els.loginDialog.open) els.loginDialog.showModal();
     // The server takes a moment after starting to look at the saved login.
     if (auth === 'unknown' && tries > 0) setTimeout(() => refreshStatus(tries - 1), 1500);
   } catch (err) {
-    els.authStatus.textContent = 'App not running';
-    els.authStatus.className = 'pill bad';
+    auth = 'offline';
+    showAuth();
     setMessage(err.message, 'bad');
   }
 }
@@ -158,89 +225,102 @@ async function refreshStatus(tries = 10) {
 async function login() {
   if (running) return;
   els.login.disabled = true;
-  els.loginPanel.hidden = false;
-  setMessage('Waiting for you to finish logging in in the Chrome window…');
+  if (!els.loginDialog.open) els.loginDialog.showModal();
   try {
     await api('/api/login', {});
     auth = 'signed_in';
     const left = batch ? remainingIndexes().length : 0;
-    setMessage(left ? `Logged in ✓ ${plural(left, 'item')} still to check.` : 'Logged in ✓', 'good',
-      left ? { label: `Check ${left} not checked`, run: () => runChecks(remainingIndexes()) } : null);
+    setMessage(left ? `You're logged in. ${plural(left, 'item')} still to check.` : 'You\'re logged in.', 'good',
+      left ? { label: `Check ${left} now`, run: () => runChecks(remainingIndexes()) } : null);
   } catch (err) {
     if (LOGIN_CODES.has(err.code)) auth = 'signed_out';
     setMessage(errorText(err), 'bad');
   } finally {
     els.login.disabled = false;
-    els.loginPanel.hidden = true;
+    if (els.loginDialog.open) els.loginDialog.close();
     showAuth();
   }
 }
 
 els.login.addEventListener('click', login);
 els.loginCancel.addEventListener('click', () => api('/api/login/cancel', {}).catch(() => {}));
+// Esc would hide the dialog while Chrome is still open; cancel the login properly instead.
+els.loginDialog.addEventListener('cancel', (event) => {
+  event.preventDefault();
+  api('/api/login/cancel', {}).catch(() => {});
+});
 
 // ---------- search area ----------
 
-function describeArea(a) {
-  if (!a?.location) return null;
-  return `${a.radiusMiles} mi around ${a.location.address || `${a.location.lat}, ${a.location.lng}`}`;
-}
-
 function showArea() {
-  const text = describeArea(area);
-  els.areaText.textContent = text || '';
-  els.areaSummary.hidden = !text || editingArea;
-  els.areaEditor.hidden = Boolean(text) && !editingArea;
+  const set = Boolean(area?.location);
+  els.areaChipText.textContent = set ? `${area.radiusMiles} mi · ${shortPlace(area)}` : 'Set search area';
+  els.areaChip.classList.toggle('unset', !set);
+  els.areaChip.title = set ? describeArea(area) : '';
   els.radius.value = area?.radiusMiles ?? 50;
   els.radiusValue.textContent = `${els.radius.value} mi`;
+  showOnboarding();
 }
 
-function openAreaEditor(focus) {
-  editingArea = true;
-  showArea();
+function openArea(focus) {
+  els.areaPanel.hidden = false;
+  els.areaChip.setAttribute('aria-expanded', 'true');
+  els.areaStatus.textContent = area?.location ? `Now: ${describeArea(area)}` : '';
+  els.areaStatus.className = 'field-status';
   if (focus) els.place.focus();
 }
 
-function lockArea(locked) {
-  for (const node of [els.areaChange, els.place, els.radius, els.useLocation, $('#area-set')]) node.disabled = locked;
+function closeArea() {
+  els.areaPanel.hidden = true;
+  els.areaChip.setAttribute('aria-expanded', 'false');
 }
 
-async function saveArea(body, { collapse }) {
+els.areaChip.addEventListener('click', () => (els.areaPanel.hidden ? openArea(true) : closeArea()));
+els.areaClose.addEventListener('click', closeArea);
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !els.areaPanel.hidden) {
+    closeArea();
+    els.areaChip.focus();
+  }
+});
+document.addEventListener('pointerdown', (event) => {
+  if (!els.areaPanel.hidden && !event.target.closest('.area-anchor')) closeArea();
+});
+
+function lockArea(locked) {
+  for (const node of [els.areaChip, els.place, els.radius, els.useLocation, els.areaSet]) node.disabled = locked;
+  if (locked) closeArea();
+}
+
+async function saveArea(body, { close }) {
   els.areaStatus.textContent = 'Saving…';
-  els.areaStatus.className = 'sub field-status';
+  els.areaStatus.className = 'field-status';
   try {
     ({ area } = await api('/api/area', body));
     els.place.value = '';
-    els.areaStatus.textContent = 'Saved ✓';
-    els.areaStatus.className = 'sub field-status good';
-    if (collapse && area.location) {
-      editingArea = false;
-      els.areaSaved.hidden = false;
-      setTimeout(() => { els.areaSaved.hidden = true; }, 2500);
-    }
+    els.areaStatus.textContent = `Saved ✓ ${describeArea(area) || ''}`;
+    els.areaStatus.className = 'field-status good';
     showArea();
+    if (close && area.location) setTimeout(closeArea, 700);
   } catch (err) {
     els.areaStatus.textContent = err.message;
-    els.areaStatus.className = 'sub field-status bad';
+    els.areaStatus.className = 'field-status bad';
   }
 }
 
 els.radius.addEventListener('input', () => { els.radiusValue.textContent = `${els.radius.value} mi`; });
-els.radius.addEventListener('change', () => saveArea({ radiusMiles: Number(els.radius.value) }, { collapse: false }));
+els.radius.addEventListener('change', () => saveArea({ radiusMiles: Number(els.radius.value) }, { close: false }));
 
 els.areaForm.addEventListener('submit', (event) => {
   event.preventDefault();
   const place = els.place.value.trim();
   if (!place) {
-    if (area?.location) { editingArea = false; showArea(); return; }
     els.areaStatus.textContent = 'Type a ZIP code, city, or address first.';
-    els.areaStatus.className = 'sub field-status bad';
+    els.areaStatus.className = 'field-status bad';
     return;
   }
-  saveArea({ place, radiusMiles: Number(els.radius.value) }, { collapse: true });
+  saveArea({ place, radiusMiles: Number(els.radius.value) }, { close: true });
 });
-
-els.areaChange.addEventListener('click', () => openAreaEditor(true));
 
 els.useLocation.addEventListener('click', () => {
   if (!navigator.geolocation) {
@@ -252,34 +332,50 @@ els.useLocation.addEventListener('click', () => {
     ({ coords }) => saveArea({
       location: { lat: coords.latitude, lng: coords.longitude, address: 'My location' },
       radiusMiles: Number(els.radius.value),
-    }, { collapse: true }),
+    }, { close: true }),
     () => {
       els.areaStatus.textContent = 'Location wasn\'t shared. Type your ZIP code instead.';
-      els.areaStatus.className = 'sub field-status bad';
+      els.areaStatus.className = 'field-status bad';
     },
     { enableHighAccuracy: false, timeout: 10000 },
   );
 });
 
-// ---------- post box ----------
+// ---------- onboarding ----------
 
-function showPostEditor(open) {
-  els.postEditor.hidden = !open;
-  els.check.hidden = !open;
-  els.keysHint.hidden = !open;
-  els.postSummary.hidden = open || !batch;
-  if (open) els.post.focus();
+function showOnboarding() {
+  els.onboarding.hidden = Boolean(batch);
+  const steps = els.onboarding.querySelectorAll('li');
+  steps[0].classList.toggle('done', auth === 'signed_in' || auth === 'saved');
+  steps[1].classList.toggle('done', Boolean(area?.location));
 }
 
-function showPostSummary() {
-  if (!batch) return;
-  const links = batch.items.length;
-  const when = batch.restored ? `from your last visit (${clock(batch.pastedAt)})` : `at ${clock(batch.pastedAt)}`;
-  els.postSummaryText.textContent = `Post pasted ${when} · ${plural(links, 'item')}`;
+// ---------- composer ----------
+
+function showComposer() {
+  const compact = Boolean(batch) && !editingPost;
+  els.composerFull.hidden = compact;
+  els.composerCompact.hidden = !compact;
+  els.composer.classList.toggle('compact', compact);
+  if (batch) {
+    const when = batch.restored ? `from your last visit, ${clock(batch.pastedAt)}` : `pasted ${clock(batch.pastedAt)}`;
+    els.postSummaryText.textContent = `${plural(batch.items.length, 'item')} · ${when}`;
+  }
 }
 
-els.postEdit.addEventListener('click', () => showPostEditor(true));
+function openEditor() {
+  editingPost = true;
+  showComposer();
+  els.postEditor.hidden = false;
+  els.post.focus();
+}
 
+els.typeToggle.addEventListener('click', () => {
+  els.postEditor.hidden = !els.postEditor.hidden;
+  if (!els.postEditor.hidden) els.post.focus();
+});
+els.postEdit.addEventListener('click', openEditor);
+els.check.addEventListener('click', () => startBatch(els.post.value));
 els.post.addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
     event.preventDefault();
@@ -287,9 +383,8 @@ els.post.addEventListener('keydown', (event) => {
   }
 });
 
-els.check.addEventListener('click', () => startBatch(els.post.value));
-
-els.pasteCheck.addEventListener('click', async () => {
+async function pasteAndCheck() {
+  if (running) return;
   let text = null;
   try {
     text = await navigator.clipboard.readText();
@@ -297,18 +392,20 @@ els.pasteCheck.addEventListener('click', async () => {
     // Clipboard access denied or unsupported.
   }
   if (!text?.trim()) {
-    showPostEditor(true);
+    openEditor();
     setMessage('Couldn\'t read your clipboard. Click in the box, press Ctrl+V (⌘V on a Mac), then Check links.', 'warn');
     return;
   }
   els.post.value = text;
   startBatch(text);
-});
+}
+
+for (const button of document.querySelectorAll('.js-paste')) button.addEventListener('click', pasteAndCheck);
 
 els.stop.addEventListener('click', () => {
   stopRequested = true;
   els.stop.disabled = true;
-  els.stop.textContent = 'Stopping after this item…';
+  els.stop.querySelector('.label').textContent = 'Stopping after this one…';
 });
 
 // ---------- batch ----------
@@ -329,11 +426,9 @@ function restoreBatch() {
     saved.states = saved.states.map((s) => (s.status === 'checking' || s.status === 'queued' ? { status: 'unchecked' } : s));
     batch = { ...saved, restored: true };
     els.post.value = batch.postText;
-    showPostSummary();
-    showPostEditor(false);
     renderAll();
     const left = remainingIndexes().length;
-    setMessage(`Showing your last results from ${clock(batch.pastedAt)}.`, '',
+    setMessage(`Here are your last results from ${clock(batch.pastedAt)}.`, '',
       left ? { label: `Check ${left} not checked`, run: () => runChecks(remainingIndexes()) } : null);
   } catch {
     // Nothing usable saved.
@@ -347,16 +442,16 @@ function remainingIndexes() {
 async function startBatch(text) {
   if (running) return;
   if (!text.trim()) {
-    showPostEditor(true);
+    openEditor();
     return setMessage('Paste a post first.', 'bad');
   }
   if (!area?.location) {
-    openAreaEditor(true);
-    return setMessage('Set where to look first.', 'bad');
+    openArea(true);
+    return setMessage('Set where you shop first, then try again.', 'bad', { label: 'Set search area', run: () => openArea(true) });
   }
 
-  setMessage('Reading links…');
-  els.pasteCheck.disabled = true;
+  setMessage('Reading the links in that post…');
+  for (const b of document.querySelectorAll('.js-paste')) b.disabled = true;
   els.check.disabled = true;
   let items;
   try {
@@ -365,11 +460,11 @@ async function startBatch(text) {
     setMessage(err.message, 'bad');
     return;
   } finally {
-    els.pasteCheck.disabled = false;
+    for (const b of document.querySelectorAll('.js-paste')) b.disabled = false;
     els.check.disabled = false;
   }
   if (!items.length) {
-    showPostEditor(true);
+    openEditor();
     return setMessage('No instoreclearance.com links in that text. Copy the whole Discord post, including the links.', 'bad');
   }
 
@@ -379,32 +474,33 @@ async function startBatch(text) {
     items,
     states: items.map((item) => (item.error ? { status: 'error', error: { code: 'bad_link', message: item.error } } : { status: 'unchecked' })),
   };
+  editingPost = false;
+  els.postEditor.hidden = true;
   saveBatch();
-  showPostSummary();
-  showPostEditor(false);
   renderAll();
   runChecks(remainingIndexes());
 }
 
-function setState(i, state) {
+function setState(i, state, { animate = false } = {}) {
   batch.states[i] = state;
   saveBatch();
-  renderRow(i);
-  renderBar();
+  renderCard(i, animate);
+  renderSummary();
 }
 
 async function runChecks(indexes) {
   if (running || !indexes.length) return;
   if (!area?.location) {
-    openAreaEditor(true);
-    return setMessage('Set where to look first.', 'bad');
+    openArea(true);
+    return setMessage('Set where you shop first.', 'bad');
   }
   if (auth === 'signed_out') {
-    return setMessage('You\'re logged out. Log in first; a Chrome window will open on this computer.', 'bad', actionFor('needs_login'));
+    return setMessage('You\'re logged out. Log in first; a Chrome window will open on this computer.', 'bad', { ...actionFor('needs_login'), code: 'needs_login' });
   }
 
   running = true;
   stopRequested = false;
+  runProgress = { done: 0, total: indexes.length };
   setRunning(true);
   for (const i of indexes) setState(i, { status: 'queued' });
 
@@ -421,7 +517,8 @@ async function runChecks(indexes) {
     setState(i, { status: 'checking', startedAt: Date.now() });
     try {
       const { result } = await api('/api/check', { dealsUrl: batch.items[i].dealsUrl });
-      setState(i, { status: 'done', result });
+      runProgress.done = n + 1;
+      setState(i, { status: 'done', result }, { animate: true });
       auth = 'signed_in';
       showAuth();
       lastCode = null;
@@ -434,6 +531,7 @@ async function runChecks(indexes) {
         }
       }
     } catch (err) {
+      runProgress.done = n + 1;
       setState(i, { status: 'error', error: { code: err.code, message: err.message, resetAt: err.resetAt } });
       if (LOGIN_CODES.has(err.code)) { auth = 'signed_out'; showAuth(); }
       if (STOP_CODES.has(err.code)) stopped = err;
@@ -447,17 +545,19 @@ async function runChecks(indexes) {
   }
 
   running = false;
+  runProgress = null;
   setRunning(false);
   finish(stopped);
 }
 
 function setRunning(on) {
-  els.pasteCheck.disabled = on;
+  for (const b of document.querySelectorAll('.js-paste')) b.disabled = on;
   els.check.disabled = on;
   els.login.disabled = on;
+  els.postEdit.disabled = on;
   els.stop.hidden = !on;
   els.stop.disabled = false;
-  els.stop.textContent = 'Stop after this item';
+  els.stop.querySelector('.label').textContent = 'Stop after this item';
   lockArea(on);
   renderAll();
 }
@@ -472,11 +572,12 @@ function finish(stopped) {
 
   document.title = `${counts.done ? '✓' : '✗'} ${tally} – ${APP_TITLE}`;
   if (stopped) {
-    setMessage(`${errorText(stopped)} (${tally})`, 'bad', actionFor(stopped.code));
+    const action = actionFor(stopped.code);
+    setMessage(`${errorText(stopped)} (${tally})`, 'bad', action && { ...action, code: stopped.code });
   } else if (stopRequested) {
     setMessage(`Stopped. ${tally}.`, 'warn');
   } else {
-    setMessage(`Done: ${tally}. Prices are for ${describeArea(area)}.`, counts.done ? 'good' : 'bad');
+    setMessage(`Done: ${tally}.`, counts.done ? 'good' : 'bad');
   }
 }
 
@@ -484,113 +585,167 @@ window.addEventListener('focus', () => {
   if (!running && document.title !== APP_TITLE && !document.title.startsWith('(')) document.title = APP_TITLE;
 });
 
-// ---------- results table ----------
+// ---------- results ----------
 
-function renderBar() {
+function profitOf(i) {
+  const item = batch.items[i];
+  const state = batch.states[i];
+  if (state.status !== 'done' || !state.result.best || !item.resell) return null;
+  return item.resell.low - state.result.best.price;
+}
+
+function stat(label, value, note, hero = false) {
+  return el('div', { class: `stat${hero ? ' hero' : ''}` },
+    el('div', { class: 'stat-label' }, label),
+    el('div', { class: 'stat-value' }, value),
+    note ? el('div', { class: 'stat-note' }, note) : null);
+}
+
+function renderSummary() {
   if (!batch) return;
-  const left = remainingIndexes().length;
+  const total = batch.items.length;
   const done = batch.states.filter((s) => s.status === 'done').length;
-  els.resultsTitle.textContent = `${done} of ${plural(batch.items.length, 'item')} priced`;
+  const profits = batch.items.map((_, i) => ({ i, p: profitOf(i) })).filter((x) => x.p != null);
+  const winners = profits.filter((x) => x.p > 0);
+  const upside = winners.reduce((sum, x) => sum + x.p, 0);
+  const best = profits.sort((a, b) => b.p - a.p)[0];
+  const bestItem = best && batch.items[best.i];
+
+  els.stats.replaceChildren(
+    stat('Potential profit', winners.length ? signedMoney(upside, 0) : '$0',
+      winners.length ? `${plural(winners.length, 'item')} worth flipping` : done ? 'Nothing profitable yet' : 'Waiting for prices', true),
+    stat('Best find', best ? signedMoney(best.p, 0) : '–',
+      bestItem ? (bestItem.name || batch.states[best.i].result.name) : 'No priced items yet'),
+    stat('Priced', el('span', {}, `${done}`, el('small', {}, ` / ${total}`)),
+      area?.location ? `within ${area.radiusMiles} mi of ${shortPlace(area)}` : null),
+  );
+
+  const left = remainingIndexes().length;
   els.checkRemaining.hidden = running || !left;
-  els.checkRemaining.textContent = `Check ${left} not checked`;
+  els.checkRemaining.replaceChildren(icon('play'), `Check ${left} not checked`);
+  els.resultsSub.textContent = running ? 'Checking one at a time to go easy on your lookups.'
+    : `From the post ${batch.restored ? 'you pasted' : 'pasted'} at ${clock(batch.pastedAt)}`;
+
+  els.progress.hidden = !runProgress;
+  if (runProgress) els.progress.firstElementChild.style.width = `${Math.max(4, (runProgress.done / runProgress.total) * 100)}%`;
 }
 
 els.checkRemaining.addEventListener('click', () => runChecks(remainingIndexes()));
 
 function renderAll() {
+  showComposer();
+  showOnboarding();
   if (!batch) return;
   els.resultsSection.hidden = false;
-  els.tbody.replaceChildren(...batch.items.map(() => el('tr')));
-  batch.items.forEach((_, i) => renderRow(i));
-  renderBar();
+  els.cards.replaceChildren(...batch.items.map(() => el('li', { class: 'card' })));
+  batch.items.forEach((_, i) => renderCard(i));
+  renderSummary();
 }
 
-function itemCell(item, result) {
-  const name = result?.name || item.name || item.url;
-  const sub = [item.retailer || result?.retailer, item.sku || result?.sku].filter(Boolean).join(' · ');
-  const twice = item.alsoPostedAs?.length ? ` · posted ${item.alsoPostedAs.length + 1}×` : '';
-  return el('td', {},
-    el('div', { class: 'item' },
-      result?.image ? el('img', { src: result.image, alt: '' }) : null,
-      el('div', {},
-        el('a', { href: item.dealsUrl || item.url, target: '_blank', rel: 'noreferrer' }, name),
-        el('div', { class: 'sub' }, sub + twice))));
+function thumb(item, result) {
+  if (result?.image) return el('div', { class: 'thumb' }, el('img', { src: result.image, alt: '', loading: 'lazy' }));
+  const [label, color] = RETAILERS[item.retailer] || [item.retailer || '?', 'var(--ink-2)'];
+  return el('div', { class: 'thumb monogram', style: `background:${color}` }, label[0].toUpperCase());
 }
 
-function postedCell(item) {
-  const off = item.postedDiscountPct != null ? ` (${item.postedDiscountPct}% off)` : '';
-  return el('td', { 'data-label': 'Posted' }, el('span', { class: 'price' }, money(item.postedPrice)), off);
+function infoBlock(item, result) {
+  const name = result?.name || item.name || 'Unnamed item';
+  const [label, color] = RETAILERS[item.retailer] || [item.retailer, 'var(--ink-2)'];
+  const off = item.postedDiscountPct != null ? ` · ${item.postedDiscountPct}% off` : '';
+  return el('div', { class: 'info' },
+    el('h3', {}, el('a', { href: item.dealsUrl || item.url, target: '_blank', rel: 'noreferrer', title: 'Open on instoreclearance.com' }, name)),
+    el('div', { class: 'meta' },
+      label ? el('span', { class: 'retailer', style: `background:${color}` }, label) : null,
+      item.sku ? el('span', { class: 'sku' }, `SKU ${item.sku}`) : null,
+      item.alsoPostedAs?.length ? el('span', { class: 'tagline' }, `· posted ${item.alsoPostedAs.length + 1}×`) : null),
+    typeof item.postedPrice === 'number'
+      ? el('div', { class: 'posted' }, 'Posted', el('strong', {}, money(item.postedPrice)), off) : null);
 }
 
-function storeLine(s) {
+function storeText(s) {
   return [s.name, s.distanceMi != null ? `${s.distanceMi} mi` : null].filter(Boolean).join(' · ');
 }
 
-function bestCell(item, result) {
-  if (!result.best) {
-    const note = result.locked ? 'Locked pricing (not in your plan)'
-      : result.fullPriceStores ? `Not on clearance near you (${plural(result.fullPriceStores, 'store')} at full price)`
-        : 'No price inside your radius';
-    return el('td', { 'data-label': 'Best near you', colspan: 3, class: 'muted' }, note);
-  }
+function priceBlock(item, result) {
   const { best } = result;
-  const off = best.discountPct != null && result.msrp ? ` (${best.discountPct}% off ${money(result.msrp)})` : '';
   const overPost = typeof item.postedPrice === 'number' && best.price > item.postedPrice + 0.5
-    ? el('div', { class: 'warn sub' }, `${money(best.price - item.postedPrice)} more than the post's price`) : null;
-  const others = result.stores.slice(1).map((s) => el('li', {}, `${money(s.price)} – ${storeLine(s)}`));
-  return el('td', { 'data-label': 'Best near you' },
-    el('span', { class: 'price' }, money(best.price)), off,
-    el('div', { class: 'sub' }, storeLine(best)),
-    best.address ? el('div', { class: 'sub' }, best.address) : null,
+    ? el('span', { class: 'note-warn' }, `${money(best.price - item.postedPrice)} more than the post's price`) : null;
+  const others = result.stores.slice(1);
+  return el('div', { class: 'price-block' },
+    el('div', { class: 'price-row' },
+      el('span', { class: 'price' }, money(best.price)),
+      result.msrp ? el('span', { class: 'msrp' }, money(result.msrp)) : null,
+      best.discountPct ? el('span', { class: 'sticker' }, `-${best.discountPct}%`) : null),
+    el('div', { class: 'where' }, icon('pin'),
+      el('div', {}, storeText(best), best.address ? el('small', {}, best.address) : null)),
     overPost,
-    others.length ? el('details', {}, el('summary', {}, `${plural(others.length, 'more store')}`), el('ul', {}, others)) : null);
+    others.length ? el('details', { class: 'more' },
+      el('summary', {}, `${plural(others.length, 'more store')}`, icon('chevron')),
+      el('ul', {}, others.map((s) => el('li', {}, el('span', {}, storeText(s)), el('b', {}, money(s.price)))))) : null);
 }
 
-function statusCell(i, state) {
-  const button = (label, run) => el('button', { type: 'button', class: 'secondary small', disabled: running, onclick: run }, label);
-  if (state.status === 'queued') return el('td', { colspan: 3, class: 'muted' }, 'Waiting…');
+function profitBlock(item, result) {
+  const profit = item.resell ? item.resell.low - result.best.price : null;
+  const tone = profit > 0 ? 'gain' : profit < 0 ? 'loss' : '';
+  return el('div', { class: `profit ${tone}` },
+    el('div', { class: 'profit-label' }, 'Est. profit'),
+    el('div', { class: 'profit-value' }, profit == null ? '–' : signedMoney(profit)),
+    el('div', { class: 'profit-note' }, item.resell ? `Resell ${item.resell.text}` : 'No resell price in the post'));
+}
+
+function stateBlock(i, state) {
+  const button = (label, run, cls = 'btn-ghost') => el('button', { type: 'button', class: `btn btn-sm ${cls}`, disabled: running, onclick: run }, label);
+  if (state.status === 'queued') return el('div', { class: 'state' }, icon('clock'), el('span', { class: 'text' }, 'In line…'));
   if (state.status === 'checking') {
-    return el('td', { colspan: 3, class: 'muted' }, el('span', { class: 'spinner', 'aria-hidden': 'true' }), el('span', { 'data-started': state.startedAt }, 'Checking…'));
+    return el('div', { class: 'skeleton', 'aria-label': 'Checking' },
+      el('div', { class: 'sk-lines' }, el('div', { class: 'sk' }), el('div', { class: 'sk' }), el('div', { class: 'sk' }),
+        el('div', { class: 'timer' }, el('span', { class: 'spinner' }), el('span', { 'data-started': state.startedAt }, 'Checking stores near you…'))),
+      el('div', { class: 'sk sk-box' }));
   }
   if (state.status === 'unchecked') {
-    return el('td', { colspan: 3, class: 'muted' }, 'Not checked ', button('Check', () => runChecks([i])));
+    return el('div', { class: 'state' }, icon('clock'), el('span', { class: 'text' }, 'Not checked yet'), button('Check', () => runChecks([i]), 'btn-ink'));
   }
   const err = state.error || {};
   const action = actionFor(err.code);
-  return el('td', { colspan: 3, class: 'bad' },
-    el('span', {}, errorText(err)), ' ',
-    action ? button(action.label, action.run) : err.code !== 'bad_link' ? button('Retry', () => runChecks([i])) : null);
+  return el('div', { class: 'state bad' }, icon('alert'), el('span', { class: 'text' }, errorText(err)),
+    action ? button(action.label, action.run, LOGIN_CODES.has(err.code) ? 'btn-discord' : 'btn-ink')
+      : err.code !== 'bad_link' ? button('Retry', () => runChecks([i])) : null);
 }
 
-function renderRow(i) {
-  const row = els.tbody.children[i];
-  if (!row) return;
+function noDealBlock(result) {
+  const text = result.locked ? 'Locked pricing: this item isn\'t in your plan on the site.'
+    : result.fullPriceStores ? `Not on clearance near you. ${plural(result.fullPriceStores, 'store')} nearby ${result.fullPriceStores === 1 ? 'has' : 'have'} it at full price.`
+      : 'No store inside your radius has a price for this.';
+  return el('div', { class: 'state neutral' }, icon('store'), el('span', { class: 'text' }, text));
+}
+
+function renderCard(i, animate = false) {
+  const card = els.cards.children[i];
+  if (!card) return;
   const item = batch.items[i];
   const state = batch.states[i];
-  const cells = [itemCell(item, state.result), postedCell(item)];
-  if (state.status !== 'done') {
-    cells.push(statusCell(i, state));
-  } else {
-    const { result } = state;
-    const best = bestCell(item, result);
-    cells.push(best);
-    if (result.best) {
-      const profit = item.resell ? item.resell.low - result.best.price : null;
-      cells.push(
-        el('td', { 'data-label': 'Resell' }, item.resell ? item.resell.text : '–'),
-        el('td', { 'data-label': 'Est. profit', class: `price ${profit > 0 ? 'good' : profit < 0 ? 'bad' : ''}` }, signedMoney(profit)),
-      );
+  const result = state.result;
+  const children = [thumb(item, result), infoBlock(item, result)];
+  let kind = state.status;
+  if (state.status === 'done') {
+    if (result.best) children.push(priceBlock(item, result), profitBlock(item, result));
+    else {
+      kind = 'done nodeal';
+      children.push(noDealBlock(result));
     }
+  } else {
+    children.push(stateBlock(i, state));
   }
-  row.className = state.status;
-  row.replaceChildren(...cells);
+  card.className = `card ${kind}${animate ? ' enter' : ''}`;
+  card.replaceChildren(...children);
 }
 
-// Live "Checking… 12 s" counter on the active row.
+// Live "Checking… 12 s" counter on the active card.
 setInterval(() => {
   for (const node of document.querySelectorAll('[data-started]')) {
     const secs = Math.round((Date.now() - Number(node.dataset.started)) / 1000);
-    node.textContent = secs >= 20 ? `Still working… ${secs} s (it may be logging you back in)` : `Checking… ${secs} s`;
+    node.textContent = secs >= 20 ? `Still working… ${secs}s (it may be logging you back in)`
+      : secs >= 2 ? `Checking stores near you… ${secs}s` : 'Checking stores near you…';
   }
 }, 1000);
 
@@ -599,7 +754,11 @@ setInterval(() => {
 showAuth();
 refreshStatus();
 api('/api/area')
-  .then((data) => { area = data.area; showArea(); })
+  .then((data) => {
+    area = data.area;
+    showArea();
+    if (!area.location && !batch) openArea(false);
+  })
   .catch((err) => setMessage(err.message, 'bad'));
 restoreBatch();
-if (!batch) showPostEditor(true);
+renderAll();
