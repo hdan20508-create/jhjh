@@ -170,13 +170,14 @@ export function prewarm(session) {
 // ---------- watching one item ----------
 
 function watchItem(page, token) {
-  const captured = { items: [], locked: null, error: null, pending: 0, lastActivity: 0, firstRequestAt: 0, firstResponseAt: 0 };
+  const captured = { items: [], locked: null, error: null, pending: 0, lastActivity: 0, firstRequestAt: 0, firstResponseAt: 0, calls: 0 };
   const reads = [];
   const mine = (req) => req.method() !== 'OPTIONS' && (ITEM_API.test(req.url()) || LOCKED_API.test(req.url())) && tokenOf(req.url()) === token;
 
   const onRequest = (req) => {
     if (!mine(req)) return;
     captured.pending++;
+    captured.calls++;
     captured.firstRequestAt ||= Date.now();
   };
   const onFailed = (req) => { if (mine(req)) captured.pending--; };
@@ -204,6 +205,10 @@ function watchItem(page, token) {
   return { captured, reads, dispose };
 }
 
+function hasPrices(item) {
+  return Object.values(item?.priceAtStores || {}).some((price) => typeof price === 'number' && price > 0);
+}
+
 // Done as soon as the price for this item's retailer is in. Only when the retailer isn't on your
 // plan (or we don't know yet) does the page make a follow-up call, so then wait for things to settle.
 async function waitForItem(page, captured, { retailer, available, timeoutMs }) {
@@ -211,7 +216,7 @@ async function waitForItem(page, captured, { retailer, available, timeoutMs }) {
   while (Date.now() < deadline) {
     if (isLoginPage(page)) return 'login';
     if ((captured.items.length || captured.error) && captured.pending <= 0) {
-      if (captured.error || available()?.has(retailer)) return 'done';
+      if (captured.error || available()?.has(retailer) || captured.items.some(hasPrices)) return 'done';
       if (Date.now() - captured.lastActivity > 1200) return 'done';
     }
     await page.waitForTimeout(100);
@@ -233,8 +238,22 @@ async function attempt(context, dealsUrl, timings) {
   const run = async (mode) => {
     const watch = watchItem(page, token);
     const start = Date.now();
+    // Record what the site requests before asking for the price, to explain a slow "page" step.
+    const trace = [];
+    const onTraceRequest = (req) => {
+      if (!watch.captured.firstRequestAt && trace.length < 20) {
+        const url = new URL(req.url());
+        // Skip what blockExtras() throws away; only list requests that actually cost time.
+        if (BLOCKED_HOSTS.test(url.hostname) || SKIPPED_API.test(url.pathname)) return;
+        if (SITE_HOSTS.test(url.hostname) && SITE_ASSET_TYPES.has(req.resourceType())) return;
+        trace.push(`+${((Date.now() - start) / 1000).toFixed(1)}s ${req.method()} ${url.hostname.split('.')[0]}${url.pathname}`);
+      }
+    };
+    page.on('request', onTraceRequest);
     try {
-      if (mode === 'warm') await page.evaluate((href) => { window.next.router.push(href); }, path);
+      // shallow: just change the item in the URL; don't make the site re-run its server-side
+      // page loading (and login check) for a page that's already showing.
+      if (mode === 'warm') await page.evaluate((href) => { window.next.router.push(href, undefined, { shallow: true }); }, path);
       else await page.goto(dealsUrl, { waitUntil: 'domcontentloaded' });
       const result = await waitForItem(page, watch.captured, {
         retailer,
@@ -247,9 +266,12 @@ async function attempt(context, dealsUrl, timings) {
       timings.pageMs = (c.firstRequestAt || Date.now()) - start;
       timings.priceMs = c.firstResponseAt && c.firstRequestAt ? c.firstResponseAt - c.firstRequestAt : null;
       timings.settleMs = c.firstResponseAt ? Date.now() - c.firstResponseAt : null;
+      timings.calls = c.calls;
+      if (timings.pageMs > 1500) timings.trace = trace;
       return { result, captured: c };
     } finally {
       watch.dispose();
+      page.off('request', onTraceRequest);
     }
   };
 
@@ -317,7 +339,9 @@ export function checkDeal(session, dealsUrl) {
           console.log(`[check] ${retailer} ${sku}: ${seconds(timings.totalMs)} total (${timings.mode} page) = `
             + `start ${seconds(timings.startMs)} + gap ${seconds(timings.gapMs)} + page ${seconds(timings.pageMs)} `
             + `+ price ${seconds(timings.priceMs)} + settle ${seconds(timings.settleMs)}`
+            + ` [${timings.calls} price call${timings.calls === 1 ? '' : 's'}]`
             + (timings.warmFailedMs ? ` (fast path gave up after ${seconds(timings.warmFailedMs)})` : ''));
+          if (timings.trace?.length) console.log(`[check]   before the price call, the site requested:\n[check]     ${timings.trace.join('\n[check]     ')}`);
           return { ...result, timings };
         }
       }

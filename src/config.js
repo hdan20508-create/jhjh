@@ -39,7 +39,7 @@ export const config = {
     : null,
   radiusMiles: num(process.env.RADIUS_MILES),
   // Minimum gap between item checks. Each check spends the site's per-hour credits.
-  checkDelayMs: num(process.env.CHECK_DELAY_MS) ?? 1000,
+  checkDelayMs: num(process.env.CHECK_DELAY_MS) ?? 500,
   loginTimeoutMs: num(process.env.LOGIN_TIMEOUT_MS) ?? 5 * 60 * 1000,
   idleCloseMs: num(process.env.IDLE_CLOSE_MS) ?? 30 * 60 * 1000,
 };

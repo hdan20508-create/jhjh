@@ -77,7 +77,7 @@ npm run area -- 60               # change only the radius
 | `SETTINGS_FILE` | `./settings.json` | Where the search area is saved |
 | `LAT`, `LNG`, `LOCATION_LABEL` | unset | Starting search area, used until you save one in the app |
 | `RADIUS_MILES` | `50` | Starting radius, used until you save one in the app |
-| `CHECK_DELAY_MS` | `1000` | Minimum gap between checks |
+| `CHECK_DELAY_MS` | `500` | Minimum gap between checks |
 | `OPEN_BROWSER` | unset | `1` opens the app in your browser on start (`start.bat` sets it) |
 | `ALLOWED_HOSTS` | unset | Extra host names allowed to reach the app, comma-separated (for phone access later) |
 
