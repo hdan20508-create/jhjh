@@ -3,17 +3,18 @@ import { AuthError, applyArea, completeLogin, isLoginPage, readSavedLocation } f
 import { config } from './config.js';
 
 export class CheckError extends Error {
-  constructor(code, message) {
+  constructor(code, message, extra = {}) {
     super(message);
     this.code = code;
+    Object.assign(this, extra);
   }
 }
 
-// Messages the site itself shows for these statuses.
+// What the site's statuses mean, in plain words.
 const STATUS_ERRORS = {
-  403: ['forbidden', 'The site refused the request. Try logging in again.'],
-  404: ['unavailable', 'This item is no longer available.'],
-  429: ['out_of_credits', 'Out of site credits. The site allows more in about an hour.'],
+  403: ['forbidden', 'The site refused this lookup. If it keeps happening, your account may have lost access to the site.'],
+  404: ['unavailable', 'This item isn\'t available on the site anymore.'],
+  429: ['out_of_credits', 'You\'re out of lookups on the site for now. They come back within about an hour.'],
 };
 
 // The deals page also loads the full feed and images, which a link check doesn't need.
@@ -56,11 +57,13 @@ export function summarize(item, storeLists, locked, location) {
       return {
         ...store,
         price,
-        discountPct: msrp && price < msrp ? Math.round(((msrp - price) / msrp) * 100) : 0,
+        discountPct: msrp ? Math.max(0, Math.round(((msrp - price) / msrp) * 100)) : null,
         distanceMi: location && store.coords ? Math.round(milesBetween(location, store.coords) * 10) / 10 : null,
       };
     })
     .sort((a, b) => a.price - b.price || (a.distanceMi ?? Infinity) - (b.distanceMi ?? Infinity));
+  // A store at full price (or above) is not a deal, even if it's the cheapest one.
+  const deals = prices.filter((s) => !msrp || s.price < msrp);
 
   return {
     name: item.name,
@@ -70,8 +73,9 @@ export function summarize(item, storeLists, locked, location) {
     productLink: item.link || null,
     category: item.category || null,
     msrp,
-    best: prices[0] || null,
-    stores: prices,
+    best: deals[0] || null,
+    stores: deals,
+    fullPriceStores: prices.length - deals.length,
     // Target items outside your plan come back as "locked" pricing instead.
     locked: locked ? { available: Boolean(locked.available), stores: Object.keys(locked.discounted || {}).length } : null,
   };
@@ -155,13 +159,14 @@ async function attempt(context, dealsUrl) {
     await Promise.all(reads);
 
     if (captured.error && !captured.items.length) {
-      const [code, message] = STATUS_ERRORS[captured.error] || ['http_error', `The site returned HTTP ${captured.error}.`];
-      throw new CheckError(code, message);
+      const [code, message] = STATUS_ERRORS[captured.error] || ['http_error', `The site had a problem with this item (error ${captured.error}). Try it again later.`];
+      const extra = code === 'out_of_credits' ? { resetAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() } : {};
+      throw new CheckError(code, message, extra);
     }
     const location = await readSavedLocation(page);
     if (state === 'timeout') {
       throw location
-        ? new CheckError('timeout', 'The site did not return prices for this item. There may be no stores in your search radius.')
+        ? new CheckError('timeout', 'The site didn\'t send prices for this item. There may be no stores that carry it inside your radius.')
         : new CheckError('no_location', 'No search area is set. Set one under "Search area" first.');
     }
 
@@ -186,10 +191,11 @@ export function checkDeal(session, dealsUrl) {
         const result = await attempt(context, dealsUrl);
         if (result) return result;
       }
-      throw new AuthError('login_loop', 'Logged in, but the site sent us back to the login page.');
+      throw new AuthError('login_loop', 'The site keeps sending the checker back to its login page. Click "Log in with Discord" to log in again.');
     } catch (err) {
       if (err instanceof AuthError || err instanceof CheckError) throw err;
-      throw new CheckError('browser_error', err.message);
+      console.error('[check]', err);
+      throw new CheckError('browser_error', 'Something went wrong in the checker\'s browser. Try this item again.');
     } finally {
       lastCheckAt = Date.now();
     }

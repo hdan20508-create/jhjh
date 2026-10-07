@@ -21,23 +21,34 @@ export function decodeItemToken(token) {
 
 function fromDealsUrl(dealsUrl) {
   const token = dealsUrl.searchParams.get('featuredItem');
-  if (!token) throw new Error('Link does not point to a featured item');
+  if (!token) throw new Error('This link didn\'t lead to a deal on the site.');
   const decoded = decodeItemToken(token);
-  if (!decoded) throw new Error('Could not read the item token in this link');
+  if (!decoded) throw new Error('This link\'s deal code couldn\'t be read.');
   return { dealsUrl: dealsUrl.toString(), token, ...decoded };
 }
 
-export async function resolveLink(link) {
-  const url = new URL(link);
-  if (url.hostname.replace(/^www\./, '') !== SITE_HOST) throw new Error(`Not an ${SITE_HOST} link`);
-  if (url.searchParams.has('featuredItem')) return fromDealsUrl(url);
+function isSiteHost(url) {
+  return url.hostname.replace(/^www\./, '') === SITE_HOST;
+}
 
-  const res = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(15000) });
-  const location = res.headers.get('location');
-  if (res.status < 300 || res.status >= 400 || !location) {
-    throw new Error(res.status === 404 ? 'Short link not found' : `Short link did not redirect (HTTP ${res.status})`);
+export async function resolveLink(link) {
+  let url = new URL(link);
+  if (!isSiteHost(url)) throw new Error(`Not an ${SITE_HOST} link`);
+  url.hostname = SITE_HOST; // www. links just redirect to the same path
+
+  // Follow the site's own redirects (a few at most) until we reach the featured deal.
+  for (let hops = 0; hops < 4; hops++) {
+    if (url.searchParams.has('featuredItem')) return fromDealsUrl(url);
+    const res = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(15000) });
+    const location = res.headers.get('location');
+    if (res.status < 300 || res.status >= 400 || !location) {
+      throw new Error(res.status === 404 ? 'This link doesn\'t exist on the site (it may have been mistyped).' : 'This link didn\'t lead to a deal on the site.');
+    }
+    url = new URL(location, SITE_ORIGIN);
+    if (!isSiteHost(url)) throw new Error('This link points somewhere other than the site.');
+    url.hostname = SITE_HOST;
   }
-  return fromDealsUrl(new URL(location, SITE_ORIGIN));
+  throw new Error('This link didn\'t lead to a deal on the site.');
 }
 
 export async function resolveAll(items, concurrency = 4) {
@@ -54,5 +65,22 @@ export async function resolveAll(items, concurrency = 4) {
     }
   }
   await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
-  return results;
+  return mergeDuplicates(results);
+}
+
+// The same product posted under two links would otherwise be looked up (and paid for) twice.
+export function mergeDuplicates(items) {
+  const byKey = new Map();
+  const merged = [];
+  for (const item of items) {
+    const key = item.sku && item.retailer ? `${item.retailer}:${item.sku}` : null;
+    const first = key && byKey.get(key);
+    if (first) {
+      first.alsoPostedAs = [...(first.alsoPostedAs || []), item.url];
+      continue;
+    }
+    if (key) byKey.set(key, item);
+    merged.push(item);
+  }
+  return merged;
 }

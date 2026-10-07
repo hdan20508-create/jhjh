@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { summarize } from '../src/checker.js';
-import { decodeItemToken, resolveLink } from '../src/resolve.js';
+import { decodeItemToken, mergeDuplicates, resolveLink } from '../src/resolve.js';
 
 // featuredItem from https://instoreclearance.com/s/MSnIK
 const TOKEN = 'NTI5OTQ2Mjg6dGFyZ2V0OjE3OTA2Nzk0NTI6OGJtVnhCQXFGdzJBYW1TaExJUlpwRlI2LU1YV244b09oSG1YU2U5T1hrcw';
@@ -32,11 +32,34 @@ test('summarize joins prices with stores and sorts by price then distance', () =
   ]];
   const r = summarize(item, stores, null, { lat: 30.27, lng: -97.74 });
 
-  assert.deepEqual(r.stores.map((s) => s.id), ['1002', '1001', '1003']);
+  assert.deepEqual(r.stores.map((s) => s.id), ['1002', '1001']);
   assert.equal(r.best.name, 'Target Far');
   assert.equal(r.best.discountPct, 70);
   assert.equal(r.best.address, '9 Elm St, Round Rock, TX 78664');
   assert.equal(r.stores[1].distanceMi, 0);
-  assert.equal(r.stores[2].name, 'Store 1003');
-  assert.equal(r.stores[2].discountPct, 0);
+  assert.equal(r.fullPriceStores, 1); // store 1003 sells at MSRP, so it's not a deal
+});
+
+test('summarize never calls a full-price store the best deal', () => {
+  const r = summarize({ highestPrice: 100, priceAtStores: { 1: 100, 2: 120 } }, [], null, null);
+  assert.equal(r.best, null);
+  assert.equal(r.stores.length, 0);
+  assert.equal(r.fullPriceStores, 2);
+});
+
+test('summarize keeps prices but no discount when MSRP is unknown', () => {
+  const r = summarize({ priceAtStores: { 1: 40 } }, [], null, null);
+  assert.equal(r.best.price, 40);
+  assert.equal(r.best.discountPct, null);
+});
+
+test('merges the same product posted under two links', () => {
+  const items = mergeDuplicates([
+    { url: 'a', sku: '1', retailer: 'target' },
+    { url: 'b', sku: '2', retailer: 'target' },
+    { url: 'c', sku: '1', retailer: 'target' },
+    { url: 'd', error: 'bad link' },
+  ]);
+  assert.deepEqual(items.map((i) => i.url), ['a', 'b', 'd']);
+  assert.deepEqual(items[0].alsoPostedAs, ['c']);
 });

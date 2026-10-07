@@ -14,23 +14,47 @@ https://instoreclearance.com/s/L4ljS
 
 ## Setup
 
-Requires Node 20+ and Google Chrome.
+Requires [Node.js](https://nodejs.org) 20+ (the LTS version) and Google Chrome. Microsoft Edge
+also works if Chrome isn't installed.
+
+**Windows:** download the project (Code → Download ZIP on GitHub, then unzip it) and double-click
+`start.bat`. The first run installs what it needs, then the app opens in your browser. Keep the
+black window open (minimized is fine) while you use it; closing it stops the app.
+
+**Mac / Linux:**
 
 ```bash
 npm install
-npm start            # http://localhost:3000
+npm start            # then open http://localhost:3000
 ```
 
-1. Click **Log in with Discord**. A Chrome window opens on your computer.
-2. Sign in to Discord (password, 2FA, captcha: all done by you, in the real Discord page) and
-   approve the site.
-3. Under **Search area**, enter a ZIP code, city, address, or `lat, lng` (or click
-   **Use my location**), pick a radius from 10 to 80 miles, and click **Save area**.
-4. Paste a post and click **Check links**.
+### First time
+
+1. Click **Log in with Discord**. A Chrome window opens on your computer. Sign in to Discord
+   (scanning the QR code with the Discord app on your phone is quickest) and click **Authorize**.
+   The window closes by itself.
+2. Under **Where should it look?**, type a ZIP code, city or address and press Enter (or click
+   **Use my location**). Drag the radius slider (10 to 80 miles) and let go; it saves itself.
+
+### Every day
+
+1. Copy a post in Discord (right-click the message → **Copy Text**).
+2. Click **Paste & check**. That's it: each link is checked one at a time, and the table fills in.
+
+- **Stop after this item** ends a run early and keeps what's already checked.
+- Rows that weren't checked (you stopped, ran out of lookups, or got logged out) show
+  **Not checked** with a **Check** button, plus a **Check N not checked** button above the table.
+  Nothing is looked up twice unless you ask.
+- Your last results come back when you reload the page or reopen the app.
+- The browser tab title shows progress, e.g. "(2/6) Checking…", so you can keep using Discord.
+- The same item posted under two links is only checked once.
 
 The search area is saved in `settings.json` and used for every check until you change it. It
 overrides whatever location is saved on the site itself. The site looks at the 50 closest stores
 inside the radius, so a bigger radius won't add more than 50.
+
+"Best near you" only counts stores selling **below** full price. If every nearby store is at full
+price, the row says "Not on clearance near you".
 
 There's also a command line:
 
@@ -54,6 +78,15 @@ npm run area -- 60               # change only the radius
 | `LAT`, `LNG`, `LOCATION_LABEL` | unset | Starting search area, used until you save one in the app |
 | `RADIUS_MILES` | `50` | Starting radius, used until you save one in the app |
 | `CHECK_DELAY_MS` | `4000` | Minimum gap between checks |
+| `OPEN_BROWSER` | unset | `1` opens the app in your browser on start (`start.bat` sets it) |
+| `ALLOWED_HOSTS` | unset | Extra host names allowed to reach the app, comma-separated (for phone access later) |
+
+Only one copy of the app can use the Chrome profile at a time, so `npm run login` / `npm run check`
+won't run while the web app is open (they say so). Use the web app's buttons instead.
+
+**Safety:** the app only listens on this computer and only answers its own page. Requests from
+other websites (or from an unexpected address) are refused, so a page you visit can't start a
+login or spend your lookups.
 
 ## How the site's auth works
 
@@ -100,6 +133,10 @@ The app never sees your Discord password or tokens. It drives the same pages you
 through, in a browser profile that stays on your machine.
 
 ## Limits to know
+
+- **Every check is one you start.** There are no scheduled or background checks, on purpose: the
+  checker's hidden browser identifies itself as automated, and unattended lookups are the fastest
+  way to burn credits or get an account flagged.
 
 - **Credits.** The site meters lookups: a 429 means *"You ran out of credits! Please re-try again in
   an hour."* Each link check costs one lookup, so checks run one at a time with a delay, and a batch

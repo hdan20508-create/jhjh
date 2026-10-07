@@ -7,9 +7,24 @@
 //   https://instoreclearance.com/s/L4ljS
 
 const LINK_RE = /https?:\/\/(?:www\.)?instoreclearance\.com\/[^\s<>()]+/gi;
-const LABEL_RE = /^\s*(retail|resell|msrp|price|sale|clearance)\s*:/i;
-const PRICE_LINE_RE = /^\s*retail\s*:\s*~?\s*\$?\s*([\d,]+(?:\.\d+)?)\s*\+?\s*(?:\(\s*(\d+(?:\.\d+)?)\s*%\s*off\s*\))?/i;
-const RESELL_LINE_RE = /^\s*resell\s*:\s*(~)?\s*\$?\s*([\d,]+(?:\.\d+)?)\s*(\+)?\s*(?:on\s+(.+?))?\s*$/i;
+const LABEL_RE = /^\s*(retail|resell|resale|sells? for|msrp|price|sale|clearance)\s*:/i;
+const PRICE_LINE_RE = /^\s*(?:retail|price|sale|clearance)\s*:\s*~?\s*\$?\s*([\d,]+(?:\.\d+)?)\s*\+?\s*(?:\(\s*(\d+(?:\.\d+)?)\s*%\s*off\s*\))?/i;
+const RESELL_LINE_RE = /^\s*(?:resell|resale|sells? for)\s*:\s*(~)?\s*\$?\s*([\d,]+(?:\.\d+)?)\s*(\+)?\s*(?:on\s+(.+?))?\s*$/i;
+
+// Discord copy-paste noise: "[3:16 PM]" prefixes and "Name — Today at 3:16 PM" header lines.
+const TIME_PREFIX_RE = /^\[\d{1,2}:\d{2}(?:\s*[AP]M)?\]\s*/i;
+const HEADER_LINE_RE = /\s[—–-]\s(?:Today|Yesterday|\d{1,2}\/\d{1,2}\/\d{2,4})(?:\s+at)?\s+\d{1,2}:\d{2}(?:\s*[AP]M)?\s*$/i;
+
+// Strips Discord markdown and leading emoji/bullets so "🔥 **Retail:** $75" reads as "Retail: $75".
+// Links are left alone (their codes can contain underscores).
+function normalizeLine(line) {
+  const parts = line.replace(TIME_PREFIX_RE, '').split(/(https?:\/\/\S+)/);
+  return parts
+    .map((part, i) => (i % 2 ? part : part.replace(/\*\*|__|~~|\|\||[*_`]/g, '')))
+    .join('')
+    .replace(/^[^\p{L}\p{N}$~(\[]+/u, '')
+    .trim();
+}
 
 function money(text) {
   return Number(text.replace(/,/g, ''));
@@ -18,8 +33,7 @@ function money(text) {
 function cleanName(text) {
   return text
     .replace(LINK_RE, '')
-    .replace(/[*_`~]+/g, '')       // Discord markdown
-    .replace(/^[\s\-•>]+/, '')
+    .replace(/[^\p{L}\p{N})\]"'.+%!?]+$/u, '') // trailing emoji and separators
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -61,7 +75,8 @@ export function parsePost(text) {
   let block = [];
 
   for (const rawLine of String(text).split(/\r?\n/)) {
-    const line = rawLine.trim();
+    if (HEADER_LINE_RE.test(rawLine)) continue;
+    const line = normalizeLine(rawLine);
     const links = line.match(LINK_RE);
     if (!links) {
       // A blank line ends a block, so intro text above the first item is dropped.

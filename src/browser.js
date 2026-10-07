@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { chromium } from 'playwright';
 import {
   config, DISCORD_CLIENT_ID, SESSION_COOKIE, SITE_HOST, SITE_ORIGIN, SUPABASE_ORIGIN,
@@ -13,8 +14,16 @@ export class AuthError extends Error {
 
 const NEEDS_LOGIN = () => new AuthError(
   'needs_login',
-  'Discord isn\'t signed in on the saved Chrome profile. Click "Log in with Discord" (or run npm run login) to sign in once.',
+  'You\'re logged out. Click "Log in with Discord" and finish signing in in the Chrome window that opens.',
 );
+
+// Errors that mean the browser itself can't run, so every other check would fail the same way.
+const BROWSER_MISSING = () => new AuthError(
+  'browser_missing',
+  'Couldn\'t start Google Chrome. Install it from google.com/chrome, then try again.',
+);
+
+const CLOSED_RE = /Target (page, context or browser )?(has been |is )?closed|Browser (has been )?closed|browser has disconnected/i;
 
 function isSitePage(url) {
   return url.hostname === SITE_HOST || url.hostname === `www.${SITE_HOST}`;
@@ -32,7 +41,7 @@ function assertExpectedOAuthClient(url) {
   if (clientId !== DISCORD_CLIENT_ID || !redirectUri.startsWith(`${SUPABASE_ORIGIN}/auth/v1/callback`)) {
     throw new AuthError(
       'unexpected_oauth_app',
-      `Refusing to approve an unexpected Discord app (client_id=${clientId}). The site's login may have changed.`,
+      `The site's Discord login changed (app ${clientId}), so the checker won't approve it automatically. Log in with Discord to approve it yourself.`,
     );
   }
 }
@@ -99,18 +108,57 @@ export async function applyArea(page, area) {
   }, { host: SITE_HOST, location: area.location, radius: area.radiusMiles });
 }
 
+// Chrome doesn't fail when a profile is already open; it hands off to the running copy and the
+// launch hangs or half-works. So the checker keeps its own lock file in the profile.
+const lockFile = () => path.join(config.profileDir, 'checker.pid');
+
+function takeProfileLock() {
+  try {
+    const pid = Number(fs.readFileSync(lockFile(), 'utf8'));
+    if (pid && pid !== process.pid) {
+      process.kill(pid, 0); // throws if that process is gone
+      throw new AuthError(
+        'profile_in_use',
+        'The checker is already running in another window. Use that one, or close it and try again.',
+      );
+    }
+  } catch (err) {
+    if (err instanceof AuthError) throw err;
+  }
+  fs.writeFileSync(lockFile(), String(process.pid));
+}
+
+function releaseProfileLock() {
+  try {
+    if (Number(fs.readFileSync(lockFile(), 'utf8')) === process.pid) fs.rmSync(lockFile());
+  } catch {
+    // already gone
+  }
+}
+
+// Tries your Chrome, then Edge (preinstalled on Windows), then Playwright's own Chromium.
 async function launch(headless) {
   fs.mkdirSync(config.profileDir, { recursive: true });
-  const options = { headless, viewport: { width: 1280, height: 900 } };
-  if (config.channel !== 'chromium') {
+  takeProfileLock();
+  const options = { headless, viewport: { width: 1280, height: 900 }, timeout: 30000 };
+  const channels = [...new Set([config.channel, 'chrome', 'msedge', 'chromium'])];
+  for (const channel of channels) {
     try {
-      return await chromium.launchPersistentContext(config.profileDir, { ...options, channel: config.channel });
+      const context = await chromium.launchPersistentContext(
+        config.profileDir,
+        channel === 'chromium' ? options : { ...options, channel },
+      );
+      if (channel !== config.channel) console.warn(`[browser] Using ${channel}; ${config.channel} was not found.`);
+      return context;
     } catch (err) {
-      if (!/executable|is not found|not installed|distribution/i.test(err.message)) throw err;
-      console.warn(`[browser] ${config.channel} not found, falling back to Playwright Chromium.`);
+      if (!/executable|is not found|not installed|distribution|doesn't exist/i.test(err.message)) {
+        releaseProfileLock();
+        throw err;
+      }
     }
   }
-  return chromium.launchPersistentContext(config.profileDir, options);
+  releaseProfileLock();
+  throw BROWSER_MISSING();
 }
 
 // Owns the single persistent context. Chrome locks a profile directory, so every use goes
@@ -141,7 +189,11 @@ export class BrowserSession {
     await this.close();
     this.#context = await launch(headless);
     this.#headless = headless;
-    this.#context.on('close', () => { this.#context = null; });
+    const context = this.#context;
+    context.on('close', () => {
+      if (this.#context === context) this.#context = null;
+      releaseProfileLock();
+    });
     return this.#context;
   }
 
@@ -150,6 +202,12 @@ export class BrowserSession {
     const context = this.#context;
     this.#context = null;
     if (context) await context.close().catch(() => {});
+    releaseProfileLock();
+  }
+
+  // Closes the visible login window if one is open (the login() call then fails as cancelled).
+  async cancelLogin() {
+    if (this.#context && !this.#headless) await this.#context.close().catch(() => {});
   }
 
   // Cheap check: is there a site session cookie in the profile? (It may still be expired;
@@ -170,6 +228,11 @@ export class BrowserSession {
         await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
         if (isLoginPage(page)) await completeLogin(page, { interactive: true });
         return { ok: true };
+      } catch (err) {
+        if (CLOSED_RE.test(err.message)) {
+          throw new AuthError('login_cancelled', 'The login window was closed before you finished. Click "Log in with Discord" to try again.');
+        }
+        throw err;
       } finally {
         await page.close().catch(() => {});
       }

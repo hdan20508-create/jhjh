@@ -46,3 +46,28 @@ test('ignores duplicate links and text without links', () => {
   assert.equal(parsePost('nothing here').length, 0);
   assert.equal(parsePost('A\nhttps://instoreclearance.com/s/X1\n\nA\nhttps://instoreclearance.com/s/X1').length, 1);
 });
+
+test('reads posts with emoji, bold labels and Discord copy-paste headers', () => {
+  const items = parsePost([
+    'Deals Bot — Today at 3:16 PM',
+    '🔥 **Vitamix Explorian E310** 🔥',
+    '💰 **Retail:** $114 (67% off)',
+    '📈 __Resell__: $250+ on eBay',
+    '🔗 https://instoreclearance.com/s/AB_cd',
+    '',
+    '[3:17 PM] • Ninja Creami NC501',
+    '> Retail: ~$75',
+    '> Resale: ~$170 on eBay',
+    '> https://www.instoreclearance.com/s/L4ljS',
+  ].join('\n'));
+  assert.equal(items.length, 2);
+  assert.equal(items[0].name, 'Vitamix Explorian E310');
+  assert.equal(items[0].postedPrice, 114);
+  assert.equal(items[0].postedDiscountPct, 67);
+  assert.equal(items[0].resell.low, 250);
+  assert.equal(items[0].url, 'https://instoreclearance.com/s/AB_cd'); // underscore in the code survives
+  assert.equal(items[1].name, 'Ninja Creami NC501');
+  assert.equal(items[1].postedPrice, 75);
+  assert.equal(items[1].resell.low, 170);
+  assert.equal(items[1].url, 'https://www.instoreclearance.com/s/L4ljS');
+});

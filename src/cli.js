@@ -16,8 +16,15 @@ function describeArea(area) {
   return `${area.radiusMiles} mi around ${where}`;
 }
 
+// Errors after which every following check would fail the same way.
+const STOP_CODES = new Set([
+  'out_of_credits', 'needs_login', 'not_authorized', 'login_timeout', 'login_loop', 'unexpected_oauth_app',
+  'no_location', 'browser_missing', 'profile_in_use', 'forbidden',
+]);
+
 function money(n) {
-  return typeof n === 'number' ? `$${n.toFixed(2)}` : '-';
+  if (typeof n !== 'number') return '-';
+  return `${n < 0 ? '-' : ''}$${Math.abs(n).toFixed(2)}`;
 }
 
 async function login(session) {
@@ -50,15 +57,16 @@ async function check(session, file) {
     }
     try {
       const r = await checkDeal(session, item.dealsUrl);
+      const off = r.best?.discountPct != null && r.msrp ? ` (${r.best.discountPct}% off ${money(r.msrp)})` : '';
       const best = r.best
-        ? `${money(r.best.price)} (${r.best.discountPct}% off ${money(r.msrp)}) at ${r.best.name}${r.best.distanceMi != null ? `, ${r.best.distanceMi} mi` : ''}`
-        : 'no discounted price near you';
+        ? `${money(r.best.price)}${off} at ${r.best.name}${r.best.distanceMi != null ? `, ${r.best.distanceMi} mi` : ''}`
+        : r.fullPriceStores ? `not on clearance near you (${r.fullPriceStores} store(s) at full price)` : 'no price inside your radius';
       const profit = r.best && item.resell ? `  est. profit ${money(item.resell.low - r.best.price)}` : '';
       console.log(`✓ ${r.name || label}  [${r.retailer} ${r.sku}]\n    best: ${best}; ${r.stores.length} store(s) with a price${profit}`);
     } catch (err) {
       console.log(`✗ ${label}\n    ${err.message}`);
       process.exitCode = 1;
-      if (['out_of_credits', 'needs_login', 'not_authorized', 'login_timeout', 'no_location'].includes(err.code)) break;
+      if (STOP_CODES.has(err.code)) break;
     }
   }
 }

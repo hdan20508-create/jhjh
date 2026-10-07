@@ -3,52 +3,81 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Clearance Link Checker</title>
+  <title>Clearance Checker</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header>
-    <h1>Clearance Link Checker</h1>
+    <h1>Clearance Checker</h1>
     <div class="auth">
       <span id="auth-status" class="pill">Checking login…</span>
       <button id="login" type="button" class="secondary">Log in with Discord</button>
     </div>
   </header>
 
+  <div id="login-panel" class="banner" role="status" hidden>
+    <div>
+      <strong>Finish logging in in the Chrome window that just opened on this computer.</strong>
+      <ul>
+        <li>Sign in to Discord. Scanning the QR code with the Discord app on your phone is quickest.</li>
+        <li>Click <em>Authorize</em> if Discord asks. The bar saying Chrome is "controlled by automated test software" is normal.</li>
+        <li>The window closes by itself when you're done.</li>
+      </ul>
+    </div>
+    <button id="login-cancel" type="button" class="secondary">Cancel</button>
+  </div>
+
   <main>
     <section class="area" aria-labelledby="area-title">
-      <div class="area-head">
-        <h2 id="area-title">Search area</h2>
-        <span id="area-current" class="sub">Loading…</span>
+      <div id="area-summary" class="area-summary" hidden>
+        <span><strong>Search area:</strong> <span id="area-text"></span> <span id="area-saved" class="saved" hidden>Saved ✓</span></span>
+        <button id="area-change" type="button" class="link">Change</button>
       </div>
-      <form id="area-form">
-        <div class="field grow">
-          <label for="place">Location</label>
-          <div class="inline">
-            <input id="place" type="text" autocomplete="postal-code" placeholder="ZIP, city, or address (or 30.27, -97.74)">
-            <button id="use-location" type="button" class="secondary">Use my location</button>
+      <div id="area-editor">
+        <h2 id="area-title">Where should it look?</h2>
+        <form id="area-form">
+          <div class="field grow">
+            <label for="place">Location</label>
+            <div class="inline">
+              <input id="place" type="text" inputmode="text" autocomplete="postal-code" placeholder="ZIP, city, or address">
+              <button id="area-set" type="submit">Set</button>
+              <button id="use-location" type="button" class="secondary">Use my location</button>
+            </div>
           </div>
-        </div>
-        <div class="field">
-          <label for="radius">Radius <output id="radius-value" for="radius"></output></label>
-          <input id="radius" type="range" min="10" max="80" step="10" value="50">
-        </div>
-        <button id="save-area" type="submit">Save area</button>
-      </form>
-      <p class="sub hint">The site checks up to the 50 closest stores inside this radius.</p>
+          <div class="field">
+            <label for="radius">Radius <output id="radius-value" for="radius"></output></label>
+            <input id="radius" type="range" min="10" max="80" step="10" value="50">
+          </div>
+        </form>
+        <p id="area-status" class="sub field-status" role="status"></p>
+        <p class="sub hint">The radius saves when you let go of the slider. The site checks up to the 50 closest stores inside it.</p>
+      </div>
     </section>
 
     <section class="input">
-      <label for="post">Paste a Discord post</label>
-      <textarea id="post" rows="10" placeholder="Ninja 0.5qt Stainless Steel Creami NC501&#10;Retail: $75 (70% off)&#10;Resell: $170+ on eBay&#10;https://instoreclearance.com/s/L4ljS"></textarea>
-      <div class="actions">
-        <button id="check" type="button">Check links</button>
-        <span id="message" role="status"></span>
+      <div id="post-summary" class="post-summary" hidden>
+        <span id="post-summary-text"></span>
+        <button id="post-edit" type="button" class="link">Edit post</button>
       </div>
+      <div id="post-editor">
+        <label for="post">Discord post</label>
+        <textarea id="post" rows="8" placeholder="Paste a Discord post here…"></textarea>
+      </div>
+      <div class="actions">
+        <button id="paste-check" type="button">Paste &amp; check</button>
+        <button id="check" type="button" class="secondary">Check links</button>
+        <button id="stop" type="button" class="danger" hidden>Stop after this item</button>
+        <span class="sub keys" id="keys-hint">or press Ctrl+Enter in the box</span>
+      </div>
+      <div id="message" class="message" role="status" aria-live="polite"></div>
     </section>
 
-    <section>
-      <table id="results" hidden>
+    <section id="results-section" hidden>
+      <div class="results-bar">
+        <span id="results-title" class="sub"></span>
+        <button id="check-remaining" type="button" class="secondary" hidden></button>
+      </div>
+      <table id="results">
         <thead>
           <tr>
             <th>Item</th>

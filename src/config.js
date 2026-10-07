@@ -21,6 +21,10 @@ const lng = num(process.env.LNG);
 
 export const config = {
   port: num(process.env.PORT) ?? 3000,
+  // Extra host names allowed to reach the app (e.g. a Tailscale name), comma-separated.
+  allowedHosts: (process.env.ALLOWED_HOSTS || '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean),
+  // start.bat sets this so the app opens in your browser once it's ready.
+  openBrowser: process.env.OPEN_BROWSER === '1',
   // A dedicated profile directory, not your everyday Chrome profile: Chrome locks a
   // profile while it is open and refuses automation on its default profile.
   profileDir: path.resolve(process.env.PROFILE_DIR || path.join(root, '.chrome-profile')),
