@@ -1,0 +1,4 @@
+node_modules/
+# The Chrome profile holds your Discord and instoreclearance.com sessions. Never commit it.
+.chrome-profile/
+.env

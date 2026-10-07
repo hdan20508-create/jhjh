@@ -1,0 +1,20 @@
+{
+  "name": "clearance-link-checker",
+  "version": "0.1.0",
+  "description": "Checks instoreclearance.com deal links from Discord posts using one saved Discord login in a dedicated Chrome profile.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "login": "node src/cli.js login",
+    "check": "node src/cli.js check",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "playwright": "^1.56.1"
+  }
+}

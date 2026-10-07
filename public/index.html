@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clearance Link Checker</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Clearance Link Checker</h1>
+    <div class="auth">
+      <span id="auth-status" class="pill">Checking login…</span>
+      <button id="login" type="button" class="secondary">Log in with Discord</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="input">
+      <label for="post">Paste a Discord post</label>
+      <textarea id="post" rows="10" placeholder="Ninja 0.5qt Stainless Steel Creami NC501&#10;Retail: $75 (70% off)&#10;Resell: $170+ on eBay&#10;https://instoreclearance.com/s/L4ljS"></textarea>
+      <div class="actions">
+        <button id="check" type="button">Check links</button>
+        <span id="message" role="status"></span>
+      </div>
+    </section>
+
+    <section>
+      <table id="results" hidden>
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th>Posted</th>
+            <th>Best near you</th>
+            <th>Resell</th>
+            <th>Est. profit</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>
