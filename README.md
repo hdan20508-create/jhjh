@@ -77,7 +77,7 @@ npm run area -- 60               # change only the radius
 | `SETTINGS_FILE` | `./settings.json` | Where the search area is saved |
 | `LAT`, `LNG`, `LOCATION_LABEL` | unset | Starting search area, used until you save one in the app |
 | `RADIUS_MILES` | `50` | Starting radius, used until you save one in the app |
-| `CHECK_DELAY_MS` | `4000` | Minimum gap between checks |
+| `CHECK_DELAY_MS` | `1000` | Minimum gap between checks |
 | `OPEN_BROWSER` | unset | `1` opens the app in your browser on start (`start.bat` sets it) |
 | `ALLOWED_HOSTS` | unset | Extra host names allowed to reach the app, comma-separated (for phone access later) |
 
@@ -125,6 +125,12 @@ Traced from the live site on 2026-10-07:
   (US only). Before each check the area is written into the site's own `localStorage` keys
   (`userLocation`, `searchSettings.searchRadius`), the same ones the site's location picker
   writes, so the site asks for prices from stores in your area.
+- **Speed** (`src/checker.js`): one deals page stays open. The app warms it up when you open the
+  app or click Paste & check, and each check switches it to the next item with the site's own
+  in-page navigation, so only the price request runs per item. If that doesn't answer within 8 s
+  (or the item is already showing), it falls back to loading the page from scratch. Each check
+  logs where its time went in the app window, e.g.
+  `[check] target 52994628: 1.4s total (warm page) = start 0.0s + gap 1.0s + page 0.0s + price 0.4s + settle 0.0s`.
 - **Checks** (`src/checker.js`): opens the resolved deals link in the signed-in profile and reads the
   site's own `getitem` response. If the page lands on `/login`, it logs in again first. It skips
   the unrelated deals feed, images and fonts.

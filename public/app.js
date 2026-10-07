@@ -383,8 +383,13 @@ els.post.addEventListener('keydown', (event) => {
   }
 });
 
+function warmUp() {
+  if (area?.location && auth !== 'signed_out') api('/api/warm', {}).catch(() => {});
+}
+
 async function pasteAndCheck() {
   if (running) return;
+  warmUp(); // start Chrome and the site while the links are being read
   let text = null;
   try {
     text = await navigator.clipboard.readText();
@@ -657,7 +662,8 @@ function infoBlock(item, result) {
     el('div', { class: 'meta' },
       label ? el('span', { class: 'retailer', style: `background:${color}` }, label) : null,
       item.sku ? el('span', { class: 'sku' }, `SKU ${item.sku}`) : null,
-      item.alsoPostedAs?.length ? el('span', { class: 'tagline' }, `· posted ${item.alsoPostedAs.length + 1}×`) : null),
+      item.alsoPostedAs?.length ? el('span', { class: 'tagline' }, `· posted ${item.alsoPostedAs.length + 1}×`) : null,
+      result?.timings?.totalMs ? el('span', { class: 'tagline', title: 'How long this check took' }, `· ${(result.timings.totalMs / 1000).toFixed(1)}s`) : null),
     typeof item.postedPrice === 'number'
       ? el('div', { class: 'posted' }, 'Posted', el('strong', {}, money(item.postedPrice)), off) : null);
 }
@@ -757,6 +763,7 @@ api('/api/area')
   .then((data) => {
     area = data.area;
     showArea();
+    warmUp();
     if (!area.location && !batch) openArea(false);
   })
   .catch((err) => setMessage(err.message, 'bad'));

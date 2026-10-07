@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { AreaError, geocode, getArea, RADIUS_MAX, RADIUS_MIN, setArea } from './area.js';
 import { AuthError, BrowserSession } from './browser.js';
-import { CheckError, checkDeal } from './checker.js';
+import { CheckError, checkDeal, prewarm } from './checker.js';
 import { config } from './config.js';
 import { parsePost } from './parse.js';
 import { resolveAll } from './resolve.js';
@@ -79,6 +79,18 @@ app.post('/api/login', async (_req, res) => {
 
 app.post('/api/login/cancel', async (_req, res) => {
   await session.cancelLogin();
+  res.json({ ok: true });
+});
+
+// Starts Chrome and loads the deals page ahead of time, so the first check doesn't wait for it.
+// Fire-and-forget: the page calls this when it opens and when you click Paste & check.
+let warming = null;
+app.post('/api/warm', (_req, res) => {
+  if (!warming && getArea().location) {
+    warming = prewarm(session)
+      .catch((err) => { noteError(err); })
+      .finally(() => { warming = null; });
+  }
   res.json({ ok: true });
 });
 

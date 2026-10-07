@@ -1,6 +1,7 @@
 import { getArea } from './area.js';
 import { AuthError, applyArea, completeLogin, isLoginPage, readSavedLocation } from './browser.js';
-import { config } from './config.js';
+import { config, SITE_ORIGIN } from './config.js';
+import { decodeItemToken } from './resolve.js';
 
 export class CheckError extends Error {
   constructor(code, message, extra = {}) {
@@ -17,13 +18,21 @@ const STATUS_ERRORS = {
   429: ['out_of_credits', 'You\'re out of lookups on the site for now. They come back within about an hour.'],
 };
 
-// The deals page also loads the full feed and images, which a link check doesn't need.
-const SKIPPED_RESOURCES = new Set(['image', 'media', 'font']);
+// A check only needs the site's data calls. Skip the deals feed, Google Maps, analytics, and the
+// site's own images/fonts/styles (only on the site, so Discord's login page still renders).
+const SITE_ASSET_TYPES = new Set(['image', 'media', 'font', 'stylesheet']);
+const SITE_HOSTS = /(^|\.)instoreclearance\.com$|\.supabase\.co$/;
+const BLOCKED_HOSTS = /googleapis\.com$|gstatic\.com$|google-analytics\.com$|googletagmanager\.com$|doubleclick\.net$/;
 const SKIPPED_API = /\/functions\/v1\/(feed|storeproducts)\b/;
 
 const ITEM_API = /\/functions\/v1\/getitem\b/;
 const LOCKED_API = /\/api\/getlockeditem\b/;
 const STORES_API = /\/functions\/v1\/get-stores\b/;
+const AVAILABLE_API = /\/functions\/v1\/get-available-stores\b/;
+
+// How long the fast path (switching an already-open deals page) may take before we give up
+// and load the page from scratch.
+const WARM_TIMEOUT_MS = 8000;
 
 function milesBetween(a, b) {
   const rad = (d) => (d * Math.PI) / 180;
@@ -89,107 +98,228 @@ async function readJson(response) {
   }
 }
 
-async function captureItem(page, dealsUrl) {
-  const captured = { items: [], storeLists: [], locked: null, error: null, pending: 0, lastActivity: 0 };
-  const reads = [];
-
-  page.on('request', (req) => {
-    if (req.method() === 'OPTIONS') return;
-    if (ITEM_API.test(req.url()) || LOCKED_API.test(req.url())) captured.pending++;
-  });
-  page.on('requestfailed', (req) => {
-    if (req.method() === 'OPTIONS') return;
-    if (ITEM_API.test(req.url()) || LOCKED_API.test(req.url())) captured.pending--;
-  });
-  page.on('response', (res) => {
-    const url = res.url();
-    const isItem = ITEM_API.test(url);
-    const isLocked = LOCKED_API.test(url);
-    if (!isItem && !isLocked && !STORES_API.test(url)) return;
-    if (res.request().method() === 'OPTIONS') return;
-    reads.push((async () => {
-      const body = res.ok() ? await readJson(res) : null;
-      if (isItem || isLocked) {
-        captured.pending--;
-        captured.lastActivity = Date.now();
-        if (!res.ok()) captured.error ??= res.status();
-      }
-      if (!body) return;
-      if (isItem) captured.items.push(body);
-      else if (isLocked) captured.locked = body.data ?? body;
-      else if (Array.isArray(body)) captured.storeLists.push(body);
-    })());
-  });
-
-  await page.goto(dealsUrl, { waitUntil: 'domcontentloaded' });
-  return { captured, reads };
+function tokenOf(url) {
+  try {
+    return new URL(url).searchParams.get('token') || new URL(url).searchParams.get('featuredItem');
+  } catch {
+    return null;
+  }
 }
 
-async function waitForItem(page, captured, timeoutMs = 30000) {
+// ---------- the warm page ----------
+// One deals page stays open between checks. The first check loads it normally; later checks switch
+// it to the next item with the site's own in-page navigation, so the site's code, your login and the
+// store lists don't reload every time. Store lists and the retailers on your plan are remembered.
+
+let warm = null; // { page, context, areaKey, stores: Map, available: Set|null, ready }
+
+async function blockExtras(page) {
+  await page.route('**/*', (route) => {
+    const req = route.request();
+    const url = new URL(req.url());
+    if (BLOCKED_HOSTS.test(url.hostname) || SKIPPED_API.test(url.pathname)) return route.abort();
+    if (SITE_HOSTS.test(url.hostname) && SITE_ASSET_TYPES.has(req.resourceType())) return route.abort();
+    return route.fallback();
+  });
+}
+
+async function warmPage(context, area) {
+  const areaKey = JSON.stringify(area);
+  if (warm && warm.context === context && warm.areaKey === areaKey && !warm.page.isClosed()) return warm;
+  if (warm && !warm.page.isClosed()) await warm.page.close().catch(() => {});
+
+  const page = await context.newPage();
+  await applyArea(page, area);
+  await blockExtras(page);
+  const state = { page, context, areaKey, stores: new Map(), available: null, ready: false };
+  page.on('response', async (res) => {
+    if (res.request().method() === 'OPTIONS' || !res.ok()) return;
+    const url = res.url();
+    if (STORES_API.test(url)) {
+      const list = await readJson(res);
+      if (Array.isArray(list)) for (const store of list) state.stores.set(String(store.no), store);
+    } else if (AVAILABLE_API.test(url)) {
+      const types = await readJson(res);
+      if (Array.isArray(types)) state.available = new Set(types);
+    }
+  });
+  page.on('close', () => { if (warm === state) warm = null; });
+  warm = state;
+  return state;
+}
+
+async function routerReady(page) {
+  return page.evaluate(() => Boolean(window.next?.router?.push) && window.location.pathname === '/deals').catch(() => false);
+}
+
+// Loads the deals page in the background (on app open or Paste & check) so the first check is fast.
+export function prewarm(session) {
+  return session.run(async (context) => {
+    const state = await warmPage(context, getArea());
+    if (state.ready) return;
+    await state.page.goto(`${SITE_ORIGIN}/deals`, { waitUntil: 'domcontentloaded' });
+    await state.page.waitForFunction(() => window.next?.router?.isReady, null, { timeout: 15000 }).catch(() => {});
+    // Let the site finish starting up (your plan and nearby stores) so the first check skips it.
+    const deadline = Date.now() + 15000;
+    while (!state.available && !isLoginPage(state.page) && Date.now() < deadline) await state.page.waitForTimeout(100);
+    if (state.available) await state.page.waitForTimeout(300);
+    state.ready = await routerReady(state.page);
+  });
+}
+
+// ---------- watching one item ----------
+
+function watchItem(page, token) {
+  const captured = { items: [], locked: null, error: null, pending: 0, lastActivity: 0, firstRequestAt: 0, firstResponseAt: 0 };
+  const reads = [];
+  const mine = (req) => req.method() !== 'OPTIONS' && (ITEM_API.test(req.url()) || LOCKED_API.test(req.url())) && tokenOf(req.url()) === token;
+
+  const onRequest = (req) => {
+    if (!mine(req)) return;
+    captured.pending++;
+    captured.firstRequestAt ||= Date.now();
+  };
+  const onFailed = (req) => { if (mine(req)) captured.pending--; };
+  const onResponse = (res) => {
+    if (!mine(res.request())) return;
+    reads.push((async () => {
+      const body = res.ok() ? await readJson(res) : null;
+      captured.pending--;
+      captured.lastActivity = Date.now();
+      captured.firstResponseAt ||= Date.now();
+      if (!res.ok()) captured.error ??= res.status();
+      if (!body) return;
+      if (ITEM_API.test(res.url())) captured.items.push(body);
+      else captured.locked = body.data ?? body;
+    })());
+  };
+  page.on('request', onRequest);
+  page.on('requestfailed', onFailed);
+  page.on('response', onResponse);
+  const dispose = () => {
+    page.off('request', onRequest);
+    page.off('requestfailed', onFailed);
+    page.off('response', onResponse);
+  };
+  return { captured, reads, dispose };
+}
+
+// Done as soon as the price for this item's retailer is in. Only when the retailer isn't on your
+// plan (or we don't know yet) does the page make a follow-up call, so then wait for things to settle.
+async function waitForItem(page, captured, { retailer, available, timeoutMs }) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (isLoginPage(page)) return 'login';
-    const settled = captured.pending <= 0 && Date.now() - captured.lastActivity > 1500;
-    if ((captured.items.length || captured.error) && settled) return 'done';
-    await page.waitForTimeout(250);
+    if ((captured.items.length || captured.error) && captured.pending <= 0) {
+      if (captured.error || available()?.has(retailer)) return 'done';
+      if (Date.now() - captured.lastActivity > 1200) return 'done';
+    }
+    await page.waitForTimeout(100);
   }
   return captured.items.length ? 'done' : 'timeout';
 }
 
 let lastCheckAt = 0;
 
-async function attempt(context, dealsUrl) {
-  const page = await context.newPage();
-  try {
-    const area = getArea();
-    await applyArea(page, area);
-    await page.route('**/*', (route) => {
-      const req = route.request();
-      if (SKIPPED_RESOURCES.has(req.resourceType()) || SKIPPED_API.test(req.url())) return route.abort();
-      return route.continue();
-    });
+async function attempt(context, dealsUrl, timings) {
+  const area = getArea();
+  const state = await warmPage(context, area);
+  const { page } = state;
+  const target = new URL(dealsUrl);
+  const token = target.searchParams.get('featuredItem');
+  const { retailer } = decodeItemToken(token) || {};
+  const path = `${target.pathname}${target.search}`;
 
-    const { captured, reads } = await captureItem(page, dealsUrl);
-    const state = await waitForItem(page, captured);
-    if (state === 'login') {
-      // Session expired: log in again through Discord (unattended if Discord is still signed in).
-      await completeLogin(page, { interactive: !config.headless });
-      return null;
+  const run = async (mode) => {
+    const watch = watchItem(page, token);
+    const start = Date.now();
+    try {
+      if (mode === 'warm') await page.evaluate((href) => { window.next.router.push(href); }, path);
+      else await page.goto(dealsUrl, { waitUntil: 'domcontentloaded' });
+      const result = await waitForItem(page, watch.captured, {
+        retailer,
+        available: () => state.available, // read live: the site may send it after we start
+        timeoutMs: mode === 'warm' ? WARM_TIMEOUT_MS : 30000,
+      });
+      await Promise.all(watch.reads);
+      const c = watch.captured;
+      timings.mode = mode;
+      timings.pageMs = (c.firstRequestAt || Date.now()) - start;
+      timings.priceMs = c.firstResponseAt && c.firstRequestAt ? c.firstResponseAt - c.firstRequestAt : null;
+      timings.settleMs = c.firstResponseAt ? Date.now() - c.firstResponseAt : null;
+      return { result, captured: c };
+    } finally {
+      watch.dispose();
     }
-    await Promise.all(reads);
+  };
 
-    if (captured.error && !captured.items.length) {
-      const [code, message] = STATUS_ERRORS[captured.error] || ['http_error', `The site had a problem with this item (error ${captured.error}). Try it again later.`];
-      const extra = code === 'out_of_credits' ? { resetAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() } : {};
-      throw new CheckError(code, message, extra);
+  // Fast path: switch the open deals page to this item. Re-checking the item it's already showing
+  // wouldn't ask the site again, so that one always reloads.
+  let outcome = null;
+  const sameItem = new URL(page.url() === 'about:blank' ? SITE_ORIGIN : page.url()).searchParams.get('featuredItem') === token;
+  if (state.ready && !sameItem && await routerReady(page)) {
+    outcome = await run('warm');
+    if (outcome.result === 'timeout') {
+      timings.warmFailedMs = timings.pageMs;
+      outcome = null;
     }
-    const location = await readSavedLocation(page);
-    if (state === 'timeout') {
-      throw location
-        ? new CheckError('timeout', 'The site didn\'t send prices for this item. There may be no stores that carry it inside your radius.')
-        : new CheckError('no_location', 'No search area is set. Set one under "Search area" first.');
-    }
-
-    // The page may ask twice (all stores, then the item's own retailer); the later answer is more specific.
-    const item = captured.items[captured.items.length - 1];
-    return {
-      ...summarize(item, captured.storeLists, captured.locked, location),
-      area: { location, radiusMiles: area.radiusMiles },
-      checkedAt: new Date().toISOString(),
-    };
-  } finally {
-    await page.close().catch(() => {});
   }
+  if (!outcome) outcome = await run('fresh');
+
+  if (outcome.result === 'login') {
+    state.ready = false;
+    // Session expired: log in again through Discord (unattended if Discord is still signed in).
+    await completeLogin(page, { interactive: !config.headless });
+    return null;
+  }
+  state.ready = await routerReady(page);
+
+  const { captured } = outcome;
+  if (captured.error && !captured.items.length) {
+    const [code, message] = STATUS_ERRORS[captured.error] || ['http_error', `The site had a problem with this item (error ${captured.error}). Try it again later.`];
+    const extra = code === 'out_of_credits' ? { resetAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() } : {};
+    throw new CheckError(code, message, extra);
+  }
+  const location = await readSavedLocation(page);
+  if (outcome.result === 'timeout') {
+    throw location
+      ? new CheckError('timeout', 'The site didn\'t send prices for this item. There may be no stores that carry it inside your radius.')
+      : new CheckError('no_location', 'No search area is set. Set one under "Search area" first.');
+  }
+
+  // The page may ask twice (all stores, then the item's own retailer); the later answer is more specific.
+  const item = captured.items[captured.items.length - 1];
+  return {
+    ...summarize(item, [[...state.stores.values()]], captured.locked, location),
+    area: { location, radiusMiles: area.radiusMiles },
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+function seconds(ms) {
+  return ms == null ? '-' : `${(ms / 1000).toFixed(1)}s`;
 }
 
 export function checkDeal(session, dealsUrl) {
+  const queuedAt = Date.now();
+  const timings = {};
   return session.run(async (context) => {
-    const wait = lastCheckAt + config.checkDelayMs - Date.now();
-    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    timings.startMs = Date.now() - queuedAt; // waiting behind other work + starting Chrome
+    const gap = lastCheckAt + config.checkDelayMs - Date.now();
+    if (gap > 0) await new Promise((r) => setTimeout(r, gap));
+    timings.gapMs = Math.max(0, gap);
     try {
       for (let tries = 0; tries < 2; tries++) {
-        const result = await attempt(context, dealsUrl);
-        if (result) return result;
+        const result = await attempt(context, dealsUrl, timings);
+        if (result) {
+          timings.totalMs = Date.now() - queuedAt;
+          const { sku, retailer } = decodeItemToken(new URL(dealsUrl).searchParams.get('featuredItem')) || {};
+          console.log(`[check] ${retailer} ${sku}: ${seconds(timings.totalMs)} total (${timings.mode} page) = `
+            + `start ${seconds(timings.startMs)} + gap ${seconds(timings.gapMs)} + page ${seconds(timings.pageMs)} `
+            + `+ price ${seconds(timings.priceMs)} + settle ${seconds(timings.settleMs)}`
+            + (timings.warmFailedMs ? ` (fast path gave up after ${seconds(timings.warmFailedMs)})` : ''));
+          return { ...result, timings };
+        }
       }
       throw new AuthError('login_loop', 'The site keeps sending the checker back to its login page. Click "Log in with Discord" to log in again.');
     } catch (err) {
