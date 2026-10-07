@@ -24,15 +24,22 @@ npm start            # http://localhost:3000
 1. Click **Log in with Discord**. A Chrome window opens on your computer.
 2. Sign in to Discord (password, 2FA, captcha: all done by you, in the real Discord page) and
    approve the site.
-3. If the site asks, pick your location on it. The checker uses whatever location and radius
-   you save on the site.
+3. Under **Search area**, enter a ZIP code, city, address, or `lat, lng` (or click
+   **Use my location**), pick a radius from 10 to 80 miles, and click **Save area**.
 4. Paste a post and click **Check links**.
+
+The search area is saved in `settings.json` and used for every check until you change it. It
+overrides whatever location is saved on the site itself. The site looks at the 50 closest stores
+inside the radius, so a bigger radius won't add more than 50.
 
 There's also a command line:
 
 ```bash
 npm run login                    # one-time Discord sign-in
 npm run check -- post.txt        # or: pbpaste | npm run check
+npm run area                     # show the search area
+npm run area -- 78701 30         # set it: ZIP/city/address/"lat, lng", then radius in miles
+npm run area -- 60               # change only the radius
 ```
 
 ### Settings (environment variables)
@@ -43,8 +50,9 @@ npm run check -- post.txt        # or: pbpaste | npm run check
 | `PROFILE_DIR` | `./.chrome-profile` | Where the Chrome profile (and your sessions) live |
 | `BROWSER_CHANNEL` | `chrome` | `chrome`, `msedge`, or `chromium` (run `npx playwright install chromium` first) |
 | `HEADLESS` | `true` | `false` shows the browser during checks |
-| `LAT`, `LNG`, `LOCATION_LABEL` | unset | Override the location saved on the site |
-| `RADIUS_MILES` | unset | Override the site's search radius |
+| `SETTINGS_FILE` | `./settings.json` | Where the search area is saved |
+| `LAT`, `LNG`, `LOCATION_LABEL` | unset | Starting search area, used until you save one in the app |
+| `RADIUS_MILES` | `50` | Starting radius, used until you save one in the app |
 | `CHECK_DELAY_MS` | `4000` | Minimum gap between checks |
 
 ## How the site's auth works
@@ -80,6 +88,10 @@ Traced from the live site on 2026-10-07:
   already signed in, it approves the consent screen, but only after checking that the request is for
   the site's Discord app and Supabase callback, and refuses anything else. If Discord needs a
   password it waits for you (visible window) or stops with "needs login" (headless).
+- **Search area** (`src/area.js`): place names are looked up with OpenStreetMap's free geocoder
+  (US only). Before each check the area is written into the site's own `localStorage` keys
+  (`userLocation`, `searchSettings.searchRadius`), the same ones the site's location picker
+  writes, so the site asks for prices from stores in your area.
 - **Checks** (`src/checker.js`): opens the resolved deals link in the signed-in profile and reads the
   site's own `getitem` response. If the page lands on `/login`, it logs in again first. It skips
   the unrelated deals feed, images and fonts.
@@ -101,7 +113,8 @@ through, in a browser profile that stays on your machine.
   start timing out, the site was probably redeployed; the "How the site's auth works" section is
   what to re-check.
 - **Keep the profile private.** `.chrome-profile/` holds live sessions for Discord and the site.
-  It's in `.gitignore`; don't copy it anywhere you wouldn't put your password.
+  It's in `.gitignore`; don't copy it anywhere you wouldn't put your password. `settings.json`
+  (your search location) is git-ignored too.
 
 ## Development
 
@@ -109,5 +122,5 @@ through, in a browser profile that stays on your machine.
 npm test
 ```
 
-Tests cover post parsing (using the sample post in `test/fixtures/`), token decoding, and the
-price summary. The browser flow was tested live up to the Discord sign-in screen.
+Tests cover post parsing (using the sample post in `test/fixtures/`), token decoding, the
+search area settings, and the price summary. The browser flow was tested live up to the Discord sign-in screen.

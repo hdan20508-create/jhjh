@@ -24,10 +24,12 @@ export const config = {
   // A dedicated profile directory, not your everyday Chrome profile: Chrome locks a
   // profile while it is open and refuses automation on its default profile.
   profileDir: path.resolve(process.env.PROFILE_DIR || path.join(root, '.chrome-profile')),
+  // Saved search area (location + radius) set from the app.
+  settingsFile: path.resolve(process.env.SETTINGS_FILE || path.join(root, 'settings.json')),
   // 'chrome' uses your installed Google Chrome; 'chromium' uses Playwright's bundled build.
   channel: process.env.BROWSER_CHANNEL || 'chrome',
   headless: process.env.HEADLESS !== 'false',
-  // Optional. When unset, the location saved on the site inside the profile is used.
+  // Optional starting search area; the app's Search area panel (settings.json) overrides it.
   location: lat !== undefined && lng !== undefined
     ? { lat, lng, address: process.env.LOCATION_LABEL || `${lat}, ${lng}` }
     : null,

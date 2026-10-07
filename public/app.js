@@ -4,6 +4,13 @@ const loginButton = $('#login');
 const checkButton = $('#check');
 const message = $('#message');
 const tbody = $('#results tbody');
+const areaForm = $('#area-form');
+const areaCurrent = $('#area-current');
+const placeInput = $('#place');
+const radiusInput = $('#radius');
+const radiusValue = $('#radius-value');
+const useLocationButton = $('#use-location');
+let currentArea = null;
 
 // Errors after which further checks would fail the same way.
 const STOP_CODES = new Set(['out_of_credits', 'needs_login', 'not_authorized', 'login_timeout', 'no_location']);
@@ -52,12 +59,63 @@ async function refreshStatus() {
   }
 }
 
+function describeArea(area) {
+  if (!area?.location) return null;
+  return `within ${area.radiusMiles} mi of ${area.location.address || `${area.location.lat}, ${area.location.lng}`}`;
+}
+
+function showArea(area) {
+  currentArea = area;
+  const text = describeArea(area);
+  areaCurrent.textContent = text ? `Checking ${text}` : 'Not set. Enter a location to start checking.';
+  areaCurrent.classList.toggle('unset', !text);
+  radiusInput.value = area.radiusMiles;
+  radiusValue.textContent = `${area.radiusMiles} mi`;
+}
+
+async function saveArea(body) {
+  areaForm.querySelectorAll('button, input').forEach((n) => { n.disabled = true; });
+  try {
+    const { area } = await api('/api/area', body);
+    showArea(area);
+    placeInput.value = '';
+    setMessage(`Search area saved: ${describeArea(area) || `${area.radiusMiles} mi radius (no location yet)`}.`);
+  } catch (err) {
+    setMessage(err.message, true);
+  } finally {
+    areaForm.querySelectorAll('button, input').forEach((n) => { n.disabled = false; });
+  }
+}
+
+radiusInput.addEventListener('input', () => {
+  radiusValue.textContent = `${radiusInput.value} mi`;
+});
+
+areaForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const place = placeInput.value.trim();
+  saveArea({ ...(place ? { place } : {}), radiusMiles: Number(radiusInput.value) });
+});
+
+useLocationButton.addEventListener('click', () => {
+  if (!navigator.geolocation) return setMessage('This browser cannot share its location. Type a ZIP or city instead.', true);
+  setMessage('Getting your location…');
+  navigator.geolocation.getCurrentPosition(
+    ({ coords }) => saveArea({
+      location: { lat: coords.latitude, lng: coords.longitude, address: 'My location' },
+      radiusMiles: Number(radiusInput.value),
+    }),
+    () => setMessage('Location permission was denied. Type a ZIP or city instead.', true),
+    { enableHighAccuracy: false, timeout: 10000 },
+  );
+});
+
 loginButton.addEventListener('click', async () => {
   loginButton.disabled = true;
-  setMessage('A Chrome window opened on this computer. Sign in to Discord, approve the site, and pick a location on the site if asked.');
+  setMessage('A Chrome window opened on this computer. Sign in to Discord and approve the site.');
   try {
-    const { location } = await api('/api/login', {});
-    setMessage(`Logged in. Checking prices near ${location?.address || 'your saved location'}.`);
+    await api('/api/login', {});
+    setMessage(currentArea?.location ? 'Logged in.' : 'Logged in. Now set your search area above.');
   } catch (err) {
     setMessage(err.message, true);
   } finally {
@@ -120,6 +178,10 @@ function renderRow(row, item, state) {
 checkButton.addEventListener('click', async () => {
   const text = $('#post').value.trim();
   if (!text) return setMessage('Paste a post first.', true);
+  if (!currentArea?.location) {
+    placeInput.focus();
+    return setMessage('Set a search area first.', true);
+  }
 
   checkButton.disabled = true;
   setMessage('Reading links…');
@@ -153,7 +215,7 @@ checkButton.addEventListener('click', async () => {
         if (STOP_CODES.has(err.code)) stopped = err;
       }
     }
-    setMessage(stopped ? `Stopped: ${stopped.message}` : 'Done.', Boolean(stopped));
+    setMessage(stopped ? `Stopped: ${stopped.message}` : `Done. Prices ${describeArea(currentArea)}.`, Boolean(stopped));
   } catch (err) {
     setMessage(err.message, true);
   } finally {
@@ -163,3 +225,4 @@ checkButton.addEventListener('click', async () => {
 });
 
 refreshStatus();
+api('/api/area').then(({ area }) => showArea(area)).catch((err) => setMessage(err.message, true));

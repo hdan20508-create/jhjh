@@ -11,6 +11,7 @@
     "start": "node src/server.js",
     "login": "node src/cli.js login",
     "check": "node src/cli.js check",
+    "area": "node src/cli.js area",
     "test": "node --test"
   },
   "dependencies": {

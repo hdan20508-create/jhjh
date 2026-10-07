@@ -64,6 +64,32 @@ main { max-width: 1100px; margin: 0 auto; padding: 24px 16px; }
 
 label { display: block; font-weight: 600; margin-bottom: 6px; }
 
+.area {
+  margin-bottom: 24px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.area-head { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; margin-bottom: 12px; }
+h2 { margin: 0; font-size: 16px; }
+#area-current.unset { color: var(--warn); }
+#area-form { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: flex-end; }
+.field.grow { flex: 1 1 320px; }
+.field input[type="range"] { width: 220px; accent-color: var(--accent); }
+.inline { display: flex; gap: 8px; }
+.inline input { flex: 1; min-width: 0; }
+input[type="text"] {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+output { font-weight: 400; color: var(--muted); margin-left: 4px; }
+.hint { margin: 10px 0 0; }
+
 textarea {
   width: 100%;
   padding: 10px;
@@ -119,6 +145,9 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 details ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
 
 @media (max-width: 720px) {
+  .inline { flex-direction: column; }
+  .field input[type="range"] { width: 100%; }
+  .field { width: 100%; }
   table, thead, tbody, tr, th, td { display: block; }
   thead { display: none; }
   tr { border-bottom: 1px solid var(--border); }

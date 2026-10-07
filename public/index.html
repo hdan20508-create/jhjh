@@ -16,6 +16,28 @@
   </header>
 
   <main>
+    <section class="area" aria-labelledby="area-title">
+      <div class="area-head">
+        <h2 id="area-title">Search area</h2>
+        <span id="area-current" class="sub">Loading…</span>
+      </div>
+      <form id="area-form">
+        <div class="field grow">
+          <label for="place">Location</label>
+          <div class="inline">
+            <input id="place" type="text" autocomplete="postal-code" placeholder="ZIP, city, or address (or 30.27, -97.74)">
+            <button id="use-location" type="button" class="secondary">Use my location</button>
+          </div>
+        </div>
+        <div class="field">
+          <label for="radius">Radius <output id="radius-value" for="radius"></output></label>
+          <input id="radius" type="range" min="10" max="80" step="10" value="50">
+        </div>
+        <button id="save-area" type="submit">Save area</button>
+      </form>
+      <p class="sub hint">The site checks up to the 50 closest stores inside this radius.</p>
+    </section>
+
     <section class="input">
       <label for="post">Paste a Discord post</label>
       <textarea id="post" rows="10" placeholder="Ninja 0.5qt Stainless Steel Creami NC501&#10;Retail: $75 (70% off)&#10;Resell: $170+ on eBay&#10;https://instoreclearance.com/s/L4ljS"></textarea>

@@ -88,22 +88,15 @@ export async function readSavedLocation(page) {
   }
 }
 
-async function waitForSavedLocation(page, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  let prompted = false;
-  while (Date.now() < deadline) {
-    if (!isSitePage(new URL(page.url()))) {
-      await page.goto(`${SITE_ORIGIN}/deals`, { waitUntil: 'domcontentloaded' });
-    }
-    const location = await readSavedLocation(page);
-    if (location) return location;
-    if (!prompted) {
-      console.log('[login] Signed in. Set your location on the site in the open window to finish setup.');
-      prompted = true;
-    }
-    await page.waitForTimeout(1000);
-  }
-  throw new AuthError('no_location', 'Signed in, but no location was saved on the site. Set LAT/LNG or pick a location on the site.');
+// The deals page only asks for prices once it knows where you are, and it reads that from
+// localStorage. Writing the area there before the site's scripts run makes every check use it.
+export async function applyArea(page, area) {
+  if (!area.location && area.radiusMiles === undefined) return;
+  await page.addInitScript(({ host, location, radius }) => {
+    if (window.location.hostname !== host) return;
+    if (location) localStorage.setItem('userLocation', JSON.stringify(location));
+    if (radius !== undefined) localStorage.setItem('searchSettings', JSON.stringify({ searchRadius: radius }));
+  }, { host: SITE_HOST, location: area.location, radius: area.radiusMiles });
 }
 
 async function launch(headless) {
@@ -149,18 +142,7 @@ export class BrowserSession {
     this.#context = await launch(headless);
     this.#headless = headless;
     this.#context.on('close', () => { this.#context = null; });
-    await this.#applyLocation(this.#context);
     return this.#context;
-  }
-
-  // The deals page only asks for prices once it knows where you are (localStorage on the site).
-  async #applyLocation(context) {
-    if (!config.location && config.radiusMiles === undefined) return;
-    await context.addInitScript(({ host, location, radius }) => {
-      if (window.location.hostname !== host) return;
-      if (location) localStorage.setItem('userLocation', JSON.stringify(location));
-      if (radius !== undefined) localStorage.setItem('searchSettings', JSON.stringify({ searchRadius: radius }));
-    }, { host: SITE_HOST, location: config.location, radius: config.radiusMiles });
   }
 
   async close() {
@@ -179,8 +161,7 @@ export class BrowserSession {
     });
   }
 
-  // One-time setup: opens a visible browser so you can sign in to Discord and approve the site,
-  // then waits for a store location to be saved on the site if none is configured.
+  // One-time setup: opens a visible browser so you can sign in to Discord and approve the site.
   login() {
     return this.run(async (context) => {
       const page = await context.newPage();
@@ -188,9 +169,7 @@ export class BrowserSession {
         await page.goto(`${SITE_ORIGIN}/deals`, { waitUntil: 'domcontentloaded' });
         await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
         if (isLoginPage(page)) await completeLogin(page, { interactive: true });
-
-        const location = await waitForSavedLocation(page, config.loginTimeoutMs);
-        return { ok: true, location };
+        return { ok: true };
       } finally {
         await page.close().catch(() => {});
       }

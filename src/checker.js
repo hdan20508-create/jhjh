@@ -1,4 +1,5 @@
-import { AuthError, completeLogin, isLoginPage, readSavedLocation } from './browser.js';
+import { getArea } from './area.js';
+import { AuthError, applyArea, completeLogin, isLoginPage, readSavedLocation } from './browser.js';
 import { config } from './config.js';
 
 export class CheckError extends Error {
@@ -136,6 +137,8 @@ let lastCheckAt = 0;
 async function attempt(context, dealsUrl) {
   const page = await context.newPage();
   try {
+    const area = getArea();
+    await applyArea(page, area);
     await page.route('**/*', (route) => {
       const req = route.request();
       if (SKIPPED_RESOURCES.has(req.resourceType()) || SKIPPED_API.test(req.url())) return route.abort();
@@ -159,12 +162,16 @@ async function attempt(context, dealsUrl) {
     if (state === 'timeout') {
       throw location
         ? new CheckError('timeout', 'The site did not return prices for this item. There may be no stores in your search radius.')
-        : new CheckError('no_location', 'No location is saved on the site. Set LAT/LNG, or pick a location on the site after logging in.');
+        : new CheckError('no_location', 'No search area is set. Set one under "Search area" first.');
     }
 
     // The page may ask twice (all stores, then the item's own retailer); the later answer is more specific.
     const item = captured.items[captured.items.length - 1];
-    return { ...summarize(item, captured.storeLists, captured.locked, location), location, checkedAt: new Date().toISOString() };
+    return {
+      ...summarize(item, captured.storeLists, captured.locked, location),
+      area: { location, radiusMiles: area.radiusMiles },
+      checkedAt: new Date().toISOString(),
+    };
   } finally {
     await page.close().catch(() => {});
   }
