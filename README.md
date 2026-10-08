@@ -57,6 +57,11 @@ inside the radius, so a bigger radius won't add more than 50.
 prices and only says which nearby stores have the item on clearance. Those cards show "3 of 36
 Target stores near you have it on clearance", the closest one, and the profit at the post's price.
 
+**Check stock** on a store asks the site how many that store has (the same check as the site's
+**Scan** button): "1 in stock · Aisle 14" or "Out of stock". It runs only when you click it, one
+store at a time, since it likely uses a lookup. It's the store's own count, which can be off, so
+call ahead before a long drive.
+
 "Best near you" only counts stores selling **below** full price. If every nearby store is at full
 price, the row says "Not on clearance near you".
 

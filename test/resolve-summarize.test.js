@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { summarize } from '../src/checker.js';
+import { pricesHidden, summarize } from '../src/checker.js';
 import { decodeItemToken, mergeDuplicates, resolveLink } from '../src/resolve.js';
 
 // featuredItem from https://instoreclearance.com/s/MSnIK
@@ -95,9 +95,18 @@ test('not on your plan: ignores the hidden prices and reports nearby stores with
     { no: 100, name: 'Target Ridgedale', coordinates: [-93.46, 44.97] },
   ];
   const locked = { available: true, discounted: { 1187: true, 1190: false, 1227: true, 100: true } };
-  const r = summarize(item, stores, locked, { lat: 42.629, lng: -71.34 }, { radiusMiles: 50, onPlan: false });
+  const r = summarize(item, stores, locked, { lat: 42.629, lng: -71.34 }, { radiusMiles: 50, hidePrices: true });
   assert.equal(r.best, null);
   assert.equal(r.stores.length, 0);
   assert.equal(r.locked.checkedStores, 3);
   assert.deepEqual(r.locked.discountedStores.map((s) => s.name), ['Target Lowell', 'Target Nashua']);
+});
+
+test('only Target has hidden prices when it is not on the plan', () => {
+  const plan = new Set(['walmart', 'homedepot']);
+  assert.equal(pricesHidden('target', plan), true);
+  assert.equal(pricesHidden('lowes', plan), false); // site fetches Lowe's stores and prices them
+  assert.equal(pricesHidden('walmart', plan), false);
+  assert.equal(pricesHidden('target', new Set(['target'])), false);
+  assert.equal(pricesHidden('target', null), false);
 });

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { AreaError, geocode, getArea, RADIUS_MAX, RADIUS_MIN, setArea } from './area.js';
 import { AuthError, BrowserSession } from './browser.js';
-import { CheckError, checkDeal, prewarm } from './checker.js';
+import { CheckError, checkDeal, checkStock, prewarm } from './checker.js';
 import { config } from './config.js';
 import { parsePost } from './parse.js';
 import { resolveAll } from './resolve.js';
@@ -126,6 +126,16 @@ app.post('/api/check', async (req, res) => {
     auth.state = 'signed_in';
     auth.browserError = null;
     res.json({ result });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// One store's stock, on demand (the site's "Scan"). Body: { retailer, sku, store, token }.
+app.post('/api/stock', async (req, res) => {
+  const { retailer, sku, store, token } = req.body || {};
+  try {
+    res.json({ stock: await checkStock(session, { retailer, sku: String(sku ?? ''), store: String(store ?? ''), token }) });
   } catch (err) {
     sendError(res, err);
   }

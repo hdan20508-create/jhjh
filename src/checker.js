@@ -1,6 +1,6 @@
 import { getArea } from './area.js';
 import { AuthError, applyArea, completeLogin, isLoginPage, readSavedLocation } from './browser.js';
-import { config, SITE_ORIGIN } from './config.js';
+import { config, SESSION_COOKIE, SITE_HOST, SITE_ORIGIN, SUPABASE_ORIGIN } from './config.js';
 import { decodeItemToken } from './resolve.js';
 
 export class CheckError extends Error {
@@ -58,10 +58,10 @@ function storeFromApi(s) {
 // so Walmart #1234 and Target #1234 are different places. The site's store lists cover the whole
 // country, so like the site we keep only stores inside your radius.
 //
-// When the item's retailer isn't on your plan (`onPlan: false`), the site hides prices: the price
+// When the site hides prices (`hidePrices`: Target when Target isn't on your plan), it: the price
 // answer it gets is for unrelated store numbers and the site ignores it. What it does show is which
 // nearby stores have the item discounted (yes/no), from the "locked" answer, so that's what we report.
-export function summarize(item, retailerStores, locked, location, { radiusMiles = null, onPlan = true } = {}) {
+export function summarize(item, retailerStores, locked, location, { radiusMiles = null, hidePrices = false } = {}) {
   const stores = new Map();
   for (const raw of retailerStores) {
     const store = storeFromApi(raw);
@@ -80,7 +80,7 @@ export function summarize(item, retailerStores, locked, location, { radiusMiles 
     msrp,
   };
 
-  if (!onPlan) {
+  if (hidePrices) {
     const flags = locked?.discounted || {};
     const checked = [...stores.values()].filter((s) => nearby(s) && s.id in flags);
     const discountedStores = checked.filter((s) => flags[s.id] === true)
@@ -239,20 +239,31 @@ function hasPrices(item) {
 
 // Done as soon as the price for this item's retailer is in. Only when the retailer isn't on your
 // plan (or we don't know yet) does the page make a follow-up call, so then wait for things to settle.
-async function waitForItem(page, captured, { retailer, available, timeoutMs }) {
+// The site's three cases (from its deals page code, confirmed with captures):
+//  - retailer on your plan: one price answer for that retailer's nearby stores.
+//  - Target, not on your plan: prices are hidden; a "locked" answer says which nearby Targets
+//    have it discounted.
+//  - any other retailer not on your plan: the site loads that retailer's stores, then asks again;
+//    only that second answer is priced at the retailer's own stores.
+export function pricesHidden(retailer, plan) {
+  return retailer === 'target' && Boolean(plan) && !plan.has('target');
+}
+
+async function waitForItem(page, captured, { retailer, available, isOwnAnswer, timeoutMs }) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (isLoginPage(page)) return 'login';
     if ((captured.items.length || captured.error) && captured.pending <= 0) {
       const plan = available();
+      const quietMs = Date.now() - captured.lastActivity;
       if (captured.error) return 'done';
-      if (plan && !plan.has(retailer)) {
-        // Not on your plan: the useful answer is the "locked" one that follows the price call.
-        if (captured.locked) return 'done';
-        if (Date.now() - captured.lastActivity > 2500) return 'done';
+      if (pricesHidden(retailer, plan)) {
+        if (captured.locked || quietMs > 2500) return 'done';
+      } else if (plan && !plan.has(retailer)) {
+        if (captured.items.some(isOwnAnswer) || quietMs > 2500) return 'done';
       } else if (plan?.has(retailer) || captured.items.some(hasPrices)) {
         return 'done';
-      } else if (Date.now() - captured.lastActivity > 1200) {
+      } else if (quietMs > 1200) {
         return 'done';
       }
     }
@@ -295,6 +306,8 @@ async function attempt(context, dealsUrl, timings) {
       const result = await waitForItem(page, watch.captured, {
         retailer,
         available: () => state.available, // read live: the site may send it after we start
+        // An answer priced at this retailer's own stores (store numbers are per retailer).
+        isOwnAnswer: (item) => Object.keys(item?.priceAtStores || {}).some((id) => state.stores.get(retailer)?.has(id)),
         timeoutMs: mode === 'warm' ? WARM_TIMEOUT_MS : 30000,
       });
       await Promise.all(watch.reads);
@@ -346,13 +359,16 @@ async function attempt(context, dealsUrl, timings) {
       : new CheckError('no_location', 'No search area is set. Set one under "Search area" first.');
   }
 
-  // The page may ask twice (all stores, then the item's own retailer); the later answer is more specific.
-  const item = captured.items[captured.items.length - 1];
+  // The page may ask more than once; prefer the latest answer priced at this retailer's own stores.
+  const ownStores = state.stores.get(retailer);
+  const item = [...captured.items].reverse().find((it) => Object.keys(it.priceAtStores || {}).some((id) => ownStores?.has(id)))
+    || captured.items[captured.items.length - 1];
   const itemRetailer = item.retailer || retailer;
-  const onPlan = state.available ? state.available.has(itemRetailer) : true;
   return {
     ...summarize(item, [...(state.stores.get(itemRetailer)?.values() || [])], captured.locked, location,
-      { radiusMiles: area.radiusMiles, onPlan }),
+      { radiusMiles: area.radiusMiles, hidePrices: pricesHidden(itemRetailer, state.available) }),
+    // The signed per-item code the site's stock check needs (not a login token).
+    stockToken: item.token || null,
     area: { location, radiusMiles: area.radiusMiles },
     checkedAt: new Date().toISOString(),
   };
@@ -393,5 +409,86 @@ export function checkDeal(session, dealsUrl) {
     } finally {
       lastCheckAt = Date.now();
     }
+  });
+}
+
+// ---------- stock check ----------
+// The same per-store check as the site's "Scan" button: how many the store has, its price, and
+// sometimes the aisle. It runs on demand only (one store per click), since it likely uses a lookup.
+
+const RETAILER_RE = /^[a-z]{2,20}$/;
+const ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
+
+function sessionToken(cookies) {
+  const named = (name) => cookies.find((c) => c.name === name)?.value;
+  let raw = named(SESSION_COOKIE);
+  if (!raw) {
+    const parts = [];
+    for (let i = 0; named(`${SESSION_COOKIE}.${i}`) != null; i++) parts.push(named(`${SESSION_COOKIE}.${i}`));
+    raw = parts.join('');
+  }
+  if (!raw) return null;
+  try {
+    raw = decodeURIComponent(raw);
+    if (raw.startsWith('base64-')) raw = Buffer.from(raw.slice(7), 'base64url').toString('utf8');
+    const session = JSON.parse(raw);
+    return Array.isArray(session) ? session[0] : session.access_token;
+  } catch {
+    return null;
+  }
+}
+
+function tokenExpired(jwt) {
+  try {
+    const { exp } = JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString('utf8'));
+    return !exp || exp * 1000 < Date.now() + 30000;
+  } catch {
+    return true;
+  }
+}
+
+export function checkStock(session, { retailer, sku, store, token }) {
+  if (!RETAILER_RE.test(retailer || '') || !ID_RE.test(sku || '') || !ID_RE.test(store || '') || !token) {
+    return Promise.reject(new CheckError('bad_request', 'Missing details for this stock check.'));
+  }
+  return session.run(async (context) => {
+    const state = await warmPage(context, getArea());
+    const { page } = state;
+    const onSite = () => { try { return new URL(page.url()).hostname === SITE_HOST; } catch { return false; } };
+
+    // The site keeps the login fresh while its page is open; reload it if the token has run out.
+    let jwt = sessionToken(await context.cookies(SITE_ORIGIN));
+    if (!onSite() || !jwt || tokenExpired(jwt)) {
+      await page.goto(`${SITE_ORIGIN}/deals`, { waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(1500);
+      state.ready = await routerReady(page);
+      if (isLoginPage(page)) throw new AuthError('needs_login', 'You\'re logged out. Click "Log in with Discord", then try the stock check again.');
+      jwt = sessionToken(await context.cookies(SITE_ORIGIN));
+      if (!jwt) throw new AuthError('needs_login', 'You\'re logged out. Click "Log in with Discord", then try the stock check again.');
+      if (tokenExpired(jwt)) throw new AuthError('needs_login', 'Your login on the site expired. Click "Re-login", then try again.');
+    }
+
+    const url = new URL(`${SUPABASE_ORIGIN}/functions/v1/stock-check`);
+    url.search = new URLSearchParams({ store, storetype: retailer, sku, token }).toString();
+    // Sent from the site's own page, like the site's Scan button.
+    const { status, body } = await page.evaluate(async ({ href, bearer }) => {
+      const res = await fetch(href, { headers: { Authorization: `Bearer ${bearer}` } });
+      let data = null;
+      try { data = await res.json(); } catch { /* not JSON */ }
+      return { status: res.status, body: data };
+    }, { href: url.toString(), bearer: jwt });
+
+    if (status === 429) throw new CheckError('out_of_credits', 'Out of stock checks on the site for now. They come back within about an hour.', { resetAt: new Date(Date.now() + 3600e3).toISOString() });
+    if (status === 401) throw new AuthError('needs_login', 'The site didn\'t accept the login. Click "Re-login", then try again.');
+    if (status === 403) throw new CheckError('forbidden', 'The site refused this stock check. Your plan may not include it for this store.');
+    if (status !== 200 || !body) throw new CheckError('http_error', `The stock check didn't work (error ${status}). Try again later.`);
+    return {
+      store,
+      inStock: typeof body.storeStock === 'number' ? body.storeStock : null,
+      price: typeof body.storePrice === 'number' && body.storePrice >= 0 ? body.storePrice : null,
+      aisle: body.aisle || null,
+      pickup: typeof body.puAvail === 'boolean' ? body.puAvail : null,
+      checkedAt: new Date().toISOString(),
+    };
   });
 }

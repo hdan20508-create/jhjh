@@ -50,6 +50,7 @@ const RETAILERS = {
   target: ['Target', '#cc0000'],
   walmart: ['Walmart', '#0071dc'],
   homedepot: ['Home Depot', '#f96302'],
+  lowes: ["Lowe's", '#004990'],
   bestbuy: ['Best Buy', '#0046be'],
   costco: ['Costco', '#e31837'],
   samsclub: ["Sam's Club", '#0067a0'],
@@ -681,7 +682,60 @@ function storeText(s) {
   return [s.name, s.distanceMi != null ? `${s.distanceMi} mi` : null].filter(Boolean).join(' · ');
 }
 
-function priceBlock(item, result) {
+// ---------- stock (on demand, one store per click, like the site's Scan button) ----------
+
+const stockPending = new Set();
+const openDetails = new Set(); // keep "more stores" open while its stock results come in
+
+async function checkStoreStock(i, storeId) {
+  const item = batch.items[i];
+  const { result } = batch.states[i];
+  const key = `${i}:${storeId}`;
+  if (stockPending.has(key)) return;
+  if (!result.stockToken) {
+    return setMessage('This result is from before stock checks existed. Re-check the item, then try again.', 'warn');
+  }
+  stockPending.add(key);
+  renderCard(i);
+  try {
+    const { stock } = await api('/api/stock', {
+      retailer: result.retailer || item.retailer, sku: result.sku || item.sku, store: storeId, token: result.stockToken,
+    });
+    result.stock = { ...result.stock, [storeId]: stock };
+    saveBatch();
+  } catch (err) {
+    if (LOGIN_CODES.has(err.code)) { auth = 'signed_out'; showAuth(); }
+    const action = actionFor(err.code);
+    setMessage(errorText(err), 'bad', action && { ...action, code: err.code });
+  } finally {
+    stockPending.delete(key);
+    renderCard(i);
+  }
+}
+
+function stockControl(i, result, store) {
+  const stock = result.stock?.[store.id];
+  if (stockPending.has(`${i}:${store.id}`)) {
+    return el('span', { class: 'stock-chip' }, el('span', { class: 'spinner' }), ' Checking…');
+  }
+  if (stock) {
+    const parts = [stock.inStock == null ? 'Stock unknown' : stock.inStock > 0 ? `${stock.inStock} in stock` : 'Out of stock'];
+    if (stock.aisle) parts.push(`Aisle ${stock.aisle}`);
+    if (stock.price != null && Math.abs(stock.price - store.price) > 0.01) parts.push(`now ${money(stock.price)}`);
+    const tone = stock.inStock > 0 ? 'in' : stock.inStock === 0 ? 'out' : '';
+    return el('span', {
+      class: `stock-chip ${tone}`,
+      title: `Checked ${clock(stock.checkedAt)}. This is the store's own count, which can be off; call ahead before a long drive.`,
+    }, parts.join(' · '));
+  }
+  return el('button', {
+    type: 'button', class: 'stock-btn', disabled: running,
+    title: 'Ask the site how many this store has (likely uses one lookup)',
+    onclick: () => checkStoreStock(i, store.id),
+  }, 'Check stock');
+}
+
+function priceBlock(i, item, result) {
   const { best } = result;
   const overPost = typeof item.postedPrice === 'number' && best.price > item.postedPrice + 0.5
     ? el('span', { class: 'note-warn' }, `${money(best.price - item.postedPrice)} more than the post's price`) : null;
@@ -692,11 +746,14 @@ function priceBlock(item, result) {
       result.msrp ? el('span', { class: 'msrp' }, money(result.msrp)) : null,
       best.discountPct ? el('span', { class: 'sticker' }, `-${best.discountPct}%`) : null),
     el('div', { class: 'where' }, icon('pin'),
-      el('div', {}, storeText(best), best.address ? el('small', {}, best.address) : null)),
+      el('div', {}, storeText(best), best.address ? el('small', {}, best.address) : null,
+        el('div', { class: 'stock-row' }, stockControl(i, result, best)))),
     overPost,
-    others.length ? el('details', { class: 'more' },
+    others.length ? el('details', { class: 'more', open: openDetails.has(i) ? true : null, ontoggle: (e) => (e.target.open ? openDetails.add(i) : openDetails.delete(i)) },
       el('summary', {}, `${plural(others.length, 'more store')}`, icon('chevron')),
-      el('ul', {}, others.map((s) => el('li', {}, el('span', {}, storeText(s)), el('b', {}, money(s.price)))))) : null);
+      el('ul', {}, others.map((s) => el('li', {},
+        el('span', {}, storeText(s)),
+        el('span', { class: 'li-right' }, stockControl(i, result, s), el('b', {}, money(s.price))))))) : null);
 }
 
 function profitBlock(item, result) {
@@ -770,7 +827,7 @@ function renderCard(i, animate = false) {
   const children = [thumb(item, result), infoBlock(item, result)];
   let kind = state.status;
   if (state.status === 'done') {
-    if (result.best) children.push(priceBlock(item, result), profitBlock(item, result));
+    if (result.best) children.push(priceBlock(i, item, result), profitBlock(item, result));
     else if (result.locked?.discountedStores?.length) children.push(lockedBlock(item, result), profitBlock(item, result));
     else {
       kind = 'done nodeal';
