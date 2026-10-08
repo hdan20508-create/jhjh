@@ -138,6 +138,23 @@ Traced from the live site on 2026-10-07:
 The app never sees your Discord password or tokens. It drives the same pages you would click
 through, in a browser profile that stays on your machine.
 
+## Sharing site data for development (`npm run capture`)
+
+Close the web app first (only one copy can use the browser profile), then:
+
+```bash
+npm run capture
+```
+
+The logged-in Chrome window opens on the site. Use it normally: open a deal, press **Scan** on a
+store or two, open a locked item. Close the window when you're done. The app saves
+`capture-<date>.json` in the project folder with what the site sent back.
+
+Before saving, everything that could log someone in is removed: login/auth traffic is never
+recorded, request headers and cookies are never recorded, and token-like fields, `eyJ…` tokens,
+`Bearer …` values, API keys and email addresses are blanked. Open the file and check it before
+sending it to anyone. `capture-*.json` files are git-ignored.
+
 ## Limits to know
 
 - **Every check is one you start.** There are no scheduled or background checks, on purpose: the

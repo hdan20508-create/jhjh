@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { geocode, getArea, setArea } from './area.js';
 import { BrowserSession } from './browser.js';
+import { capture } from './capture.js';
 import { checkDeal } from './checker.js';
 import { parsePost } from './parse.js';
 import { resolveAll } from './resolve.js';
@@ -9,7 +10,8 @@ const usage = `Usage:
   npm run login                  One-time: sign in to Discord in the saved Chrome profile
   npm run check -- post.txt      Check every link in a pasted Discord post (or pipe it on stdin)
   npm run area                   Show the search area
-  npm run area -- 78701 30       Set it: ZIP, city, address or "lat, lng", then radius in miles`;
+  npm run area -- 78701 30       Set it: ZIP, city, address or "lat, lng", then radius in miles
+  npm run capture                Record what the site sends while you use it (login details removed)`;
 
 function describeArea(area) {
   const where = area.location ? (area.location.address || `${area.location.lat}, ${area.location.lng}`) : '(no location set)';
@@ -77,6 +79,12 @@ try {
   if (command === 'login') await login(session);
   else if (command === 'check') await check(session, args[0]);
   else if (command === 'area') await area(args);
+  else if (command === 'capture') {
+    const { file, total, counts } = await capture(session, process.cwd());
+    console.log(`\nSaved ${total} responses to ${file}`);
+    for (const [name, n] of Object.entries(counts).sort((a, b) => b[1] - a[1])) console.log(`  ${String(n).padStart(3)}  ${name}`);
+    console.log('\nOpen it to check what\'s inside, then send it over.');
+  }
   else console.log(usage);
 } catch (err) {
   console.error(err.message);

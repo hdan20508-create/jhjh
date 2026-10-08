@@ -4,3 +4,5 @@ node_modules/
 .env
 # Your saved search area (home location).
 settings.json
+# Recordings from npm run capture.
+capture-*.json

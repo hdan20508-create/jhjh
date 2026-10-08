@@ -12,6 +12,7 @@
     "login": "node src/cli.js login",
     "check": "node src/cli.js check",
     "area": "node src/cli.js area",
+    "capture": "node src/cli.js capture",
     "test": "node --test"
   },
   "dependencies": {
