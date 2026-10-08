@@ -26,10 +26,11 @@ test('summarize joins prices with stores and sorts by price then distance', () =
     name: 'Vitamix E310', sku: '52994628', retailer: 'target', highestPrice: 349.99,
     priceAtStores: { 1001: 114.99, 1002: 104.99, 1003: 349.99, 1004: -1 },
   };
-  const stores = [[
+  const stores = [
     { no: 1001, name: 'Target Near', streetAddress: '1 Main St', city: 'Austin', stateProvCode: 'TX', zip: '78701', coordinates: [-97.74, 30.27] },
     { no: 1002, name: 'Target Far', streetAddress: '9 Elm St', city: 'Round Rock', stateProvCode: 'TX', zip: '78664', coordinates: [-97.68, 30.51] },
-  ]];
+    { no: 1003, name: 'Target Mall', coordinates: [-97.7, 30.3] },
+  ];
   const r = summarize(item, stores, null, { lat: 30.27, lng: -97.74 });
 
   assert.deepEqual(r.stores.map((s) => s.id), ['1002', '1001']);
@@ -38,6 +39,15 @@ test('summarize joins prices with stores and sorts by price then distance', () =
   assert.equal(r.best.address, '9 Elm St, Round Rock, TX 78664');
   assert.equal(r.stores[1].distanceMi, 0);
   assert.equal(r.fullPriceStores, 1); // store 1003 sells at MSRP, so it's not a deal
+});
+
+test('summarize ignores prices at stores that are not the item\'s retailer', () => {
+  // The site prices the item across every nearby store number; #2002 here is a Walmart number,
+  // not one of the Target stores, so it must not show up as a Target store.
+  const item = { retailer: 'target', highestPrice: 100, priceAtStores: { 1001: 40, 2002: 20 } };
+  const r = summarize(item, [{ no: 1001, name: 'Target Near', coordinates: [-97.74, 30.27] }], null, null);
+  assert.deepEqual(r.stores.map((s) => s.name), ['Target Near']);
+  assert.equal(r.best.price, 40);
 });
 
 test('summarize never calls a full-price store the best deal', () => {

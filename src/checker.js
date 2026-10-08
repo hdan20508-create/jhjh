@@ -54,13 +54,17 @@ function storeFromApi(s) {
 }
 
 // Combines the site's getitem response with the store list it fetched for the same page.
-export function summarize(item, storeLists, locked, location) {
+// `retailerStores` must be the item's own retailer's stores only: store numbers are per retailer,
+// so Walmart #1234 and Target #1234 are different places. Like the site, only prices at the item's
+// retailer's stores count; when we don't have that retailer's list, prices show with their number.
+export function summarize(item, retailerStores, locked, location) {
   const stores = new Map();
-  for (const list of storeLists) for (const s of list) stores.set(String(s.no), storeFromApi(s));
+  for (const s of retailerStores) stores.set(String(s.no), storeFromApi(s));
 
   const msrp = item.highestPrice || null;
   const prices = Object.entries(item.priceAtStores || {})
     .filter(([, price]) => typeof price === 'number' && price > 0)
+    .filter(([id]) => !stores.size || stores.has(id))
     .map(([id, price]) => {
       const store = stores.get(id) || { id, name: `Store ${id}`, address: null, coords: null, link: null };
       return {
@@ -111,7 +115,7 @@ function tokenOf(url) {
 // it to the next item with the site's own in-page navigation, so the site's code, your login and the
 // store lists don't reload every time. Store lists and the retailers on your plan are remembered.
 
-let warm = null; // { page, context, areaKey, stores: Map, available: Set|null, ready }
+let warm = null; // { page, context, areaKey, stores: Map(retailer -> Map(no -> store)), available, ready }
 
 async function blockExtras(page) {
   await page.route('**/*', (route) => {
@@ -136,8 +140,11 @@ async function warmPage(context, area) {
     if (res.request().method() === 'OPTIONS' || !res.ok()) return;
     const url = res.url();
     if (STORES_API.test(url)) {
+      const type = new URL(url).searchParams.get('storeType');
       const list = await readJson(res);
-      if (Array.isArray(list)) for (const store of list) state.stores.set(String(store.no), store);
+      if (!type || !Array.isArray(list)) return;
+      if (!state.stores.has(type)) state.stores.set(type, new Map());
+      for (const store of list) state.stores.get(type).set(String(store.no), store);
     } else if (AVAILABLE_API.test(url)) {
       const types = await readJson(res);
       if (Array.isArray(types)) state.available = new Set(types);
@@ -311,8 +318,9 @@ async function attempt(context, dealsUrl, timings) {
 
   // The page may ask twice (all stores, then the item's own retailer); the later answer is more specific.
   const item = captured.items[captured.items.length - 1];
+  const itemRetailer = item.retailer || retailer;
   return {
-    ...summarize(item, [[...state.stores.values()]], captured.locked, location),
+    ...summarize(item, [...(state.stores.get(itemRetailer)?.values() || [])], captured.locked, location),
     area: { location, radiusMiles: area.radiusMiles },
     checkedAt: new Date().toISOString(),
   };
