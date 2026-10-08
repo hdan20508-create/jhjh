@@ -54,7 +54,9 @@ overrides whatever location is saved on the site itself. The site looks at the 5
 inside the radius, so a bigger radius won't add more than 50.
 
 **Retailers not on your plan on the site** (check the site's plan list): the site hides their
-prices and only says which nearby stores have the item on clearance. Those cards show "3 of 36
+prices and only says which nearby stores have the item on clearance. Use **Check stock** on one of
+those stores: the site's stock check usually returns the price too, so it fills in both the count
+and the real price one store at a time. Once a price comes back, the profit updates to use it. Those cards show "3 of 36
 Target stores near you have it on clearance", the closest one, and the profit at the post's price.
 
 **Check stock** on a store asks the site how many that store has (the same check as the site's

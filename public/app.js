@@ -593,20 +593,26 @@ window.addEventListener('focus', () => {
 
 // ---------- results ----------
 
-// What you'd pay: the best local price, or for items whose prices the site hides (retailer not on
-// your plan) the post's price, but only if a nearby store has it on clearance.
+// What you'd pay: the best local price. For items whose prices the site hides (Target off-plan),
+// use the lowest price a stock check has revealed; until one is checked, fall back to the post's
+// price. `exact` is true only when it's a real local price, not the post's estimate.
 function buyPrice(item, result) {
-  if (result?.best) return result.best.price;
-  if (result?.locked?.discountedStores?.length && typeof item.postedPrice === 'number') return item.postedPrice;
+  if (result?.best) return { price: result.best.price, exact: true };
+  if (!result?.locked?.discountedStores?.length) return null;
+  const checked = Object.values(result.stock || {})
+    .filter((s) => s && typeof s.price === 'number' && (s.inStock == null || s.inStock > 0))
+    .map((s) => s.price);
+  if (checked.length) return { price: Math.min(...checked), exact: true };
+  if (typeof item.postedPrice === 'number') return { price: item.postedPrice, exact: false };
   return null;
 }
 
 function profitOf(i) {
   const item = batch.items[i];
   const state = batch.states[i];
-  const price = state.status === 'done' ? buyPrice(item, state.result) : null;
-  if (price == null || !item.resell) return null;
-  return item.resell.low - price;
+  const buy = state.status === 'done' ? buyPrice(item, state.result) : null;
+  if (buy == null || !item.resell) return null;
+  return item.resell.low - buy.price;
 }
 
 function stat(label, value, note, hero = false) {
@@ -721,7 +727,12 @@ function stockControl(i, result, store) {
   if (stock) {
     const parts = [stock.inStock == null ? 'Stock unknown' : stock.inStock > 0 ? `${stock.inStock} in stock` : 'Out of stock'];
     if (stock.aisle) parts.push(`Aisle ${stock.aisle}`);
-    if (stock.price != null && Math.abs(stock.price - store.price) > 0.01) parts.push(`now ${money(stock.price)}`);
+    // For priced stores show the price only if it changed; for locked (Target) stores it's the
+    // price the plan otherwise hides, so always show it.
+    if (stock.price != null) {
+      if (store.price == null) parts.unshift(money(stock.price));
+      else if (Math.abs(stock.price - store.price) > 0.01) parts.push(`now ${money(stock.price)}`);
+    }
     const tone = stock.inStock > 0 ? 'in' : stock.inStock === 0 ? 'out' : '';
     return el('span', {
       class: `stock-chip ${tone}`,
@@ -757,10 +768,10 @@ function priceBlock(i, item, result) {
 }
 
 function profitBlock(item, result) {
-  const price = buyPrice(item, result);
-  const profit = item.resell && price != null ? item.resell.low - price : null;
+  const buy = buyPrice(item, result);
+  const profit = item.resell && buy != null ? item.resell.low - buy.price : null;
   const tone = profit > 0 ? 'gain' : profit < 0 ? 'loss' : '';
-  const atPosted = !result.best;
+  const atPosted = buy != null && !buy.exact;
   return el('div', { class: `profit ${tone}` },
     el('div', { class: 'profit-label' }, atPosted ? 'Est. profit at post\'s price' : 'Est. profit'),
     el('div', { class: 'profit-value' }, profit == null ? '–' : signedMoney(profit)),
@@ -772,7 +783,7 @@ function retailerName(item) {
 }
 
 // Retailer not on your plan: the site hides prices and only says which nearby stores have it on clearance.
-function lockedBlock(item, result) {
+function lockedBlock(i, item, result) {
   const { discountedStores, checkedStores } = result.locked;
   const name = retailerName(item);
   const [closest, ...others] = discountedStores;
@@ -781,11 +792,14 @@ function lockedBlock(item, result) {
       el('span', { class: 'price' }, String(discountedStores.length)),
       el('span', { class: 'locked-of' }, `of ${plural(checkedStores, `${name} store`)} near you ${discountedStores.length === 1 ? 'has' : 'have'} it on clearance`)),
     el('div', { class: 'where' }, icon('pin'),
-      el('div', {}, `Closest: ${storeText(closest)}`, closest.address ? el('small', {}, closest.address) : null)),
-    el('span', { class: 'note-warn' }, `${name} isn't on your plan, so the site hides the price${typeof item.postedPrice === 'number' ? `. The post says ${money(item.postedPrice)}.` : '.'}`),
-    others.length ? el('details', { class: 'more' },
+      el('div', {}, `Closest: ${storeText(closest)}`, closest.address ? el('small', {}, closest.address) : null,
+        el('div', { class: 'stock-row' }, stockControl(i, result, closest)))),
+    el('span', { class: 'note-warn' }, `${name} isn't on your plan, so the site hides the price. Check stock on a store to see what it has — and, if the site returns it, the price.${typeof item.postedPrice === 'number' ? ` The post says ${money(item.postedPrice)}.` : ''}`),
+    others.length ? el('details', { class: 'more', open: openDetails.has(i) ? true : null, ontoggle: (e) => (e.target.open ? openDetails.add(i) : openDetails.delete(i)) },
       el('summary', {}, `${plural(others.length, 'more store')}`, icon('chevron')),
-      el('ul', {}, others.map((s) => el('li', {}, el('span', {}, storeText(s)), el('b', {}, 'on clearance'))))) : null);
+      el('ul', {}, others.map((s) => el('li', {},
+        el('span', {}, storeText(s)),
+        el('span', { class: 'li-right' }, stockControl(i, result, s), el('b', {}, 'on clearance')))))) : null);
 }
 
 function stateBlock(i, state) {
@@ -828,7 +842,7 @@ function renderCard(i, animate = false) {
   let kind = state.status;
   if (state.status === 'done') {
     if (result.best) children.push(priceBlock(i, item, result), profitBlock(item, result));
-    else if (result.locked?.discountedStores?.length) children.push(lockedBlock(item, result), profitBlock(item, result));
+    else if (result.locked?.discountedStores?.length) children.push(lockedBlock(i, item, result), profitBlock(item, result));
     else {
       kind = 'done nodeal';
       children.push(noDealBlock(item, result));
