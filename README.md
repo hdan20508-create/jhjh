@@ -53,6 +53,10 @@ The search area is saved in `settings.json` and used for every check until you c
 overrides whatever location is saved on the site itself. The site looks at the 50 closest stores
 inside the radius, so a bigger radius won't add more than 50.
 
+**Retailers not on your plan on the site** (check the site's plan list): the site hides their
+prices and only says which nearby stores have the item on clearance. Those cards show "3 of 36
+Target stores near you have it on clearance", the closest one, and the profit at the post's price.
+
 "Best near you" only counts stores selling **below** full price. If every nearby store is at full
 price, the row says "Not on clearance near you".
 

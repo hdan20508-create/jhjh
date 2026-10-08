@@ -73,3 +73,31 @@ test('merges the same product posted under two links', () => {
   assert.deepEqual(items.map((i) => i.url), ['a', 'b', 'd']);
   assert.deepEqual(items[0].alsoPostedAs, ['c']);
 });
+
+test('summarize keeps only stores inside the radius (store lists are nationwide)', () => {
+  const item = { retailer: 'walmart', highestPrice: 100, priceAtStores: { 1: 40, 2: 20 } };
+  const stores = [
+    { no: 1, name: 'Walmart Lowell', coordinates: [-71.33, 42.63] },
+    { no: 2, name: 'Walmart Minnetonka', coordinates: [-93.46, 44.97] },
+  ];
+  const r = summarize(item, stores, null, { lat: 42.629, lng: -71.34 }, { radiusMiles: 50 });
+  assert.deepEqual(r.stores.map((s) => s.name), ['Walmart Lowell']);
+});
+
+test('not on your plan: ignores the hidden prices and reports nearby stores with it on clearance', () => {
+  // Shapes from a real capture: Target not on the plan; getitem prices are for unrelated store
+  // numbers, getlockeditem says which nearby Targets have it discounted.
+  const item = { retailer: 'target', highestPrice: 98.99, priceAtStores: { 1187: 30, 9999: 30 } };
+  const stores = [
+    { no: 1187, name: 'Target Lowell', coordinates: [-71.33, 42.63] },
+    { no: 1190, name: 'Target Burlington', coordinates: [-71.2, 42.48] },
+    { no: 1227, name: 'Target Nashua', coordinates: [-71.46, 42.76] },
+    { no: 100, name: 'Target Ridgedale', coordinates: [-93.46, 44.97] },
+  ];
+  const locked = { available: true, discounted: { 1187: true, 1190: false, 1227: true, 100: true } };
+  const r = summarize(item, stores, locked, { lat: 42.629, lng: -71.34 }, { radiusMiles: 50, onPlan: false });
+  assert.equal(r.best, null);
+  assert.equal(r.stores.length, 0);
+  assert.equal(r.locked.checkedStores, 3);
+  assert.deepEqual(r.locked.discountedStores.map((s) => s.name), ['Target Lowell', 'Target Nashua']);
+});

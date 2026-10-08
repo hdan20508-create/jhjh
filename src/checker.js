@@ -55,30 +55,22 @@ function storeFromApi(s) {
 
 // Combines the site's getitem response with the store list it fetched for the same page.
 // `retailerStores` must be the item's own retailer's stores only: store numbers are per retailer,
-// so Walmart #1234 and Target #1234 are different places. Like the site, only prices at the item's
-// retailer's stores count; when we don't have that retailer's list, prices show with their number.
-export function summarize(item, retailerStores, locked, location) {
+// so Walmart #1234 and Target #1234 are different places. The site's store lists cover the whole
+// country, so like the site we keep only stores inside your radius.
+//
+// When the item's retailer isn't on your plan (`onPlan: false`), the site hides prices: the price
+// answer it gets is for unrelated store numbers and the site ignores it. What it does show is which
+// nearby stores have the item discounted (yes/no), from the "locked" answer, so that's what we report.
+export function summarize(item, retailerStores, locked, location, { radiusMiles = null, onPlan = true } = {}) {
   const stores = new Map();
-  for (const s of retailerStores) stores.set(String(s.no), storeFromApi(s));
-
+  for (const raw of retailerStores) {
+    const store = storeFromApi(raw);
+    store.distanceMi = location && store.coords ? Math.round(milesBetween(location, store.coords) * 10) / 10 : null;
+    stores.set(store.id, store);
+  }
+  const nearby = (store) => radiusMiles == null || store.distanceMi == null || store.distanceMi <= radiusMiles;
   const msrp = item.highestPrice || null;
-  const prices = Object.entries(item.priceAtStores || {})
-    .filter(([, price]) => typeof price === 'number' && price > 0)
-    .filter(([id]) => !stores.size || stores.has(id))
-    .map(([id, price]) => {
-      const store = stores.get(id) || { id, name: `Store ${id}`, address: null, coords: null, link: null };
-      return {
-        ...store,
-        price,
-        discountPct: msrp ? Math.max(0, Math.round(((msrp - price) / msrp) * 100)) : null,
-        distanceMi: location && store.coords ? Math.round(milesBetween(location, store.coords) * 10) / 10 : null,
-      };
-    })
-    .sort((a, b) => a.price - b.price || (a.distanceMi ?? Infinity) - (b.distanceMi ?? Infinity));
-  // A store at full price (or above) is not a deal, even if it's the cheapest one.
-  const deals = prices.filter((s) => !msrp || s.price < msrp);
-
-  return {
+  const base = {
     name: item.name,
     sku: item.sku,
     retailer: item.retailer,
@@ -86,11 +78,40 @@ export function summarize(item, retailerStores, locked, location) {
     productLink: item.link || null,
     category: item.category || null,
     msrp,
+  };
+
+  if (!onPlan) {
+    const flags = locked?.discounted || {};
+    const checked = [...stores.values()].filter((s) => nearby(s) && s.id in flags);
+    const discountedStores = checked.filter((s) => flags[s.id] === true)
+      .sort((a, b) => (a.distanceMi ?? Infinity) - (b.distanceMi ?? Infinity));
+    return {
+      ...base,
+      best: null,
+      stores: [],
+      fullPriceStores: 0,
+      locked: { discountedStores, checkedStores: checked.length },
+    };
+  }
+
+  const prices = Object.entries(item.priceAtStores || {})
+    .filter(([, price]) => typeof price === 'number' && price > 0)
+    .filter(([id]) => !stores.size || (stores.has(id) && nearby(stores.get(id))))
+    .map(([id, price]) => ({
+      ...(stores.get(id) || { id, name: `Store ${id}`, address: null, coords: null, link: null, distanceMi: null }),
+      price,
+      discountPct: msrp ? Math.max(0, Math.round(((msrp - price) / msrp) * 100)) : null,
+    }))
+    .sort((a, b) => a.price - b.price || (a.distanceMi ?? Infinity) - (b.distanceMi ?? Infinity));
+  // A store at full price (or above) is not a deal, even if it's the cheapest one.
+  const deals = prices.filter((s) => !msrp || s.price < msrp);
+
+  return {
+    ...base,
     best: deals[0] || null,
     stores: deals,
     fullPriceStores: prices.length - deals.length,
-    // Target items outside your plan come back as "locked" pricing instead.
-    locked: locked ? { available: Boolean(locked.available), stores: Object.keys(locked.discounted || {}).length } : null,
+    locked: null,
   };
 }
 
@@ -223,8 +244,17 @@ async function waitForItem(page, captured, { retailer, available, timeoutMs }) {
   while (Date.now() < deadline) {
     if (isLoginPage(page)) return 'login';
     if ((captured.items.length || captured.error) && captured.pending <= 0) {
-      if (captured.error || available()?.has(retailer) || captured.items.some(hasPrices)) return 'done';
-      if (Date.now() - captured.lastActivity > 1200) return 'done';
+      const plan = available();
+      if (captured.error) return 'done';
+      if (plan && !plan.has(retailer)) {
+        // Not on your plan: the useful answer is the "locked" one that follows the price call.
+        if (captured.locked) return 'done';
+        if (Date.now() - captured.lastActivity > 2500) return 'done';
+      } else if (plan?.has(retailer) || captured.items.some(hasPrices)) {
+        return 'done';
+      } else if (Date.now() - captured.lastActivity > 1200) {
+        return 'done';
+      }
     }
     await page.waitForTimeout(100);
   }
@@ -319,8 +349,10 @@ async function attempt(context, dealsUrl, timings) {
   // The page may ask twice (all stores, then the item's own retailer); the later answer is more specific.
   const item = captured.items[captured.items.length - 1];
   const itemRetailer = item.retailer || retailer;
+  const onPlan = state.available ? state.available.has(itemRetailer) : true;
   return {
-    ...summarize(item, [...(state.stores.get(itemRetailer)?.values() || [])], captured.locked, location),
+    ...summarize(item, [...(state.stores.get(itemRetailer)?.values() || [])], captured.locked, location,
+      { radiusMiles: area.radiusMiles, onPlan }),
     area: { location, radiusMiles: area.radiusMiles },
     checkedAt: new Date().toISOString(),
   };

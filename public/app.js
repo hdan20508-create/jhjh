@@ -592,11 +592,20 @@ window.addEventListener('focus', () => {
 
 // ---------- results ----------
 
+// What you'd pay: the best local price, or for items whose prices the site hides (retailer not on
+// your plan) the post's price, but only if a nearby store has it on clearance.
+function buyPrice(item, result) {
+  if (result?.best) return result.best.price;
+  if (result?.locked?.discountedStores?.length && typeof item.postedPrice === 'number') return item.postedPrice;
+  return null;
+}
+
 function profitOf(i) {
   const item = batch.items[i];
   const state = batch.states[i];
-  if (state.status !== 'done' || !state.result.best || !item.resell) return null;
-  return item.resell.low - state.result.best.price;
+  const price = state.status === 'done' ? buyPrice(item, state.result) : null;
+  if (price == null || !item.resell) return null;
+  return item.resell.low - price;
 }
 
 function stat(label, value, note, hero = false) {
@@ -691,12 +700,35 @@ function priceBlock(item, result) {
 }
 
 function profitBlock(item, result) {
-  const profit = item.resell ? item.resell.low - result.best.price : null;
+  const price = buyPrice(item, result);
+  const profit = item.resell && price != null ? item.resell.low - price : null;
   const tone = profit > 0 ? 'gain' : profit < 0 ? 'loss' : '';
+  const atPosted = !result.best;
   return el('div', { class: `profit ${tone}` },
-    el('div', { class: 'profit-label' }, 'Est. profit'),
+    el('div', { class: 'profit-label' }, atPosted ? 'Est. profit at post\'s price' : 'Est. profit'),
     el('div', { class: 'profit-value' }, profit == null ? '–' : signedMoney(profit)),
     el('div', { class: 'profit-note' }, item.resell ? `Resell ${item.resell.text}` : 'No resell price in the post'));
+}
+
+function retailerName(item) {
+  return (RETAILERS[item.retailer] || [item.retailer || 'this store'])[0];
+}
+
+// Retailer not on your plan: the site hides prices and only says which nearby stores have it on clearance.
+function lockedBlock(item, result) {
+  const { discountedStores, checkedStores } = result.locked;
+  const name = retailerName(item);
+  const [closest, ...others] = discountedStores;
+  return el('div', { class: 'price-block' },
+    el('div', { class: 'price-row' },
+      el('span', { class: 'price' }, String(discountedStores.length)),
+      el('span', { class: 'locked-of' }, `of ${plural(checkedStores, `${name} store`)} near you ${discountedStores.length === 1 ? 'has' : 'have'} it on clearance`)),
+    el('div', { class: 'where' }, icon('pin'),
+      el('div', {}, `Closest: ${storeText(closest)}`, closest.address ? el('small', {}, closest.address) : null)),
+    el('span', { class: 'note-warn' }, `${name} isn't on your plan, so the site hides the price${typeof item.postedPrice === 'number' ? `. The post says ${money(item.postedPrice)}.` : '.'}`),
+    others.length ? el('details', { class: 'more' },
+      el('summary', {}, `${plural(others.length, 'more store')}`, icon('chevron')),
+      el('ul', {}, others.map((s) => el('li', {}, el('span', {}, storeText(s)), el('b', {}, 'on clearance'))))) : null);
 }
 
 function stateBlock(i, state) {
@@ -718,8 +750,12 @@ function stateBlock(i, state) {
       : err.code !== 'bad_link' ? button('Retry', () => runChecks([i])) : null);
 }
 
-function noDealBlock(result) {
-  const text = result.locked ? 'Locked pricing: this item isn\'t in your plan on the site.'
+function noDealBlock(item, result) {
+  const name = retailerName(item);
+  const text = result.locked
+    ? (result.locked.checkedStores
+      ? `Not on clearance at any of the ${plural(result.locked.checkedStores, `${name} store`)} near you. (${name} isn't on your plan, so the site hides prices.)`
+      : `${name} isn't on your plan, so the site hides prices for this item, and it didn't report any ${name} stores near you.`)
     : result.fullPriceStores ? `Not on clearance near you. ${plural(result.fullPriceStores, 'store')} nearby ${result.fullPriceStores === 1 ? 'has' : 'have'} it at full price.`
       : 'No store inside your radius has a price for this.';
   return el('div', { class: 'state neutral' }, icon('store'), el('span', { class: 'text' }, text));
@@ -735,9 +771,10 @@ function renderCard(i, animate = false) {
   let kind = state.status;
   if (state.status === 'done') {
     if (result.best) children.push(priceBlock(item, result), profitBlock(item, result));
+    else if (result.locked?.discountedStores?.length) children.push(lockedBlock(item, result), profitBlock(item, result));
     else {
       kind = 'done nodeal';
-      children.push(noDealBlock(result));
+      children.push(noDealBlock(item, result));
     }
   } else {
     children.push(stateBlock(i, state));

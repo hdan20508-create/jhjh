@@ -501,6 +501,7 @@ main {
 .price-block { min-width: 0; }
 .price-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; }
 .price { font: 800 30px/1 var(--display); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.locked-of { color: var(--ink-2); font-size: 14px; font-weight: 600; max-width: 24ch; line-height: 1.3; }
 .msrp { color: var(--faint); text-decoration: line-through; font-size: 14px; font-variant-numeric: tabular-nums; }
 .sticker {
   display: inline-block;
