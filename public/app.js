@@ -82,6 +82,7 @@ const ICONS = {
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   store: '<path d="M4 9l1.5-5h13L20 9M4 9v11h16V9M4 9h16M10 20v-5h4v5"/>',
   play: '<path d="M8 5v14l11-7z"/>',
+  route: '<circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="6" r="2.2"/><path d="M8 18h7a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h7"/>',
 };
 
 function icon(name) {
@@ -688,18 +689,34 @@ function storeText(s) {
   return [s.name, s.distanceMi != null ? `${s.distanceMi} mi` : null].filter(Boolean).join(' · ');
 }
 
+function directionsUrl(s) {
+  const to = s.address || (s.coords ? `${s.coords.lat},${s.coords.lng}` : null);
+  return to ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(to)}` : null;
+}
+
+// A store's name that opens driving directions (plain text when there's no address).
+function storeLink(s) {
+  const href = directionsUrl(s);
+  return href ? el('a', { class: 'store-link', href, target: '_blank', rel: 'noreferrer', title: `Directions to ${s.address || s.name}` }, storeText(s))
+    : el('span', {}, storeText(s));
+}
+
 // ---------- stock (on demand, one store per click, like the site's Scan button) ----------
 
 const stockPending = new Set();
+const stockQueued = new Set(); // waiting their turn in a "Check N closest" run
+const stockRuns = new Set(); // cards running "Check N closest"
+const CLOSEST_COUNT = 3;
 const openDetails = new Set(); // keep "more stores" open while its stock results come in
 
 async function checkStoreStock(i, storeId) {
   const item = batch.items[i];
   const { result } = batch.states[i];
   const key = `${i}:${storeId}`;
-  if (stockPending.has(key)) return;
+  if (stockPending.has(key)) return null;
   if (!result.stockToken) {
-    return setMessage('This result is from before stock checks existed. Re-check the item, then try again.', 'warn');
+    setMessage('This result is from before stock checks existed. Re-check the item, then try again.', 'warn');
+    return { code: 'no_token' };
   }
   stockPending.add(key);
   renderCard(i);
@@ -713,10 +730,57 @@ async function checkStoreStock(i, storeId) {
     if (LOGIN_CODES.has(err.code)) { auth = 'signed_out'; showAuth(); }
     const action = actionFor(err.code);
     setMessage(errorText(err), 'bad', action && { ...action, code: err.code });
+    return err;
   } finally {
     stockPending.delete(key);
+    stockQueued.delete(key);
     renderCard(i);
   }
+  return null;
+}
+
+// The stores a card lists: priced stores, or the locked ones that have it on clearance.
+function cardStores(result) {
+  return result.best ? result.stores : result.locked?.discountedStores || [];
+}
+
+function closestUnchecked(i, result) {
+  return cardStores(result)
+    .filter((s) => !result.stock?.[s.id] && !stockPending.has(`${i}:${s.id}`))
+    .sort((a, b) => (a.distanceMi ?? Infinity) - (b.distanceMi ?? Infinity))
+    .slice(0, CLOSEST_COUNT);
+}
+
+// Checks stock at the closest stores not checked yet, one after another, stopping at the first
+// problem so a lost login or empty credits doesn't burn through the rest.
+async function checkClosest(i) {
+  const { result } = batch.states[i];
+  const stores = closestUnchecked(i, result);
+  if (stockRuns.has(i) || !stores.length) return;
+  stockRuns.add(i);
+  for (const s of stores) stockQueued.add(`${i}:${s.id}`);
+  if (stores.some((s) => s !== cardStores(result)[0])) openDetails.add(i);
+  renderCard(i);
+  try {
+    for (const s of stores) {
+      if (await checkStoreStock(i, s.id)) break;
+    }
+  } finally {
+    for (const s of stores) stockQueued.delete(`${i}:${s.id}`);
+    stockRuns.delete(i);
+    renderCard(i);
+  }
+}
+
+function closestButton(i, result) {
+  if (stockRuns.has(i)) return null;
+  const n = closestUnchecked(i, result).length;
+  if (n < 2) return null;
+  return el('button', {
+    type: 'button', class: 'stock-btn bulk', disabled: running,
+    title: `Checks stock at the ${n} closest stores you haven't checked, one at a time (likely ${n} lookups). Stops at the first problem.`,
+    onclick: () => checkClosest(i),
+  }, `Check ${n} closest`);
 }
 
 function stockControl(i, result, store) {
@@ -724,6 +788,7 @@ function stockControl(i, result, store) {
   if (stockPending.has(`${i}:${store.id}`)) {
     return el('span', { class: 'stock-chip' }, el('span', { class: 'spinner' }), ' Checking…');
   }
+  if (stockQueued.has(`${i}:${store.id}`)) return el('span', { class: 'stock-chip' }, 'In line…');
   if (stock) {
     const parts = [stock.inStock == null ? 'Stock unknown' : stock.inStock > 0 ? `${stock.inStock} in stock` : 'Out of stock'];
     if (stock.aisle) parts.push(`Aisle ${stock.aisle}`);
@@ -757,13 +822,13 @@ function priceBlock(i, item, result) {
       result.msrp ? el('span', { class: 'msrp' }, money(result.msrp)) : null,
       best.discountPct ? el('span', { class: 'sticker' }, `-${best.discountPct}%`) : null),
     el('div', { class: 'where' }, icon('pin'),
-      el('div', {}, storeText(best), best.address ? el('small', {}, best.address) : null,
-        el('div', { class: 'stock-row' }, stockControl(i, result, best)))),
+      el('div', {}, storeLink(best), best.address ? el('small', {}, best.address) : null,
+        el('div', { class: 'stock-row' }, stockControl(i, result, best), closestButton(i, result)))),
     overPost,
     others.length ? el('details', { class: 'more', open: openDetails.has(i) ? true : null, ontoggle: (e) => (e.target.open ? openDetails.add(i) : openDetails.delete(i)) },
       el('summary', {}, `${plural(others.length, 'more store')}`, icon('chevron')),
       el('ul', {}, others.map((s) => el('li', {},
-        el('span', {}, storeText(s)),
+        storeLink(s),
         el('span', { class: 'li-right' }, stockControl(i, result, s), el('b', {}, money(s.price))))))) : null);
 }
 
@@ -792,14 +857,14 @@ function lockedBlock(i, item, result) {
       el('span', { class: 'price' }, String(discountedStores.length)),
       el('span', { class: 'locked-of' }, `of ${plural(checkedStores, `${name} store`)} near you ${discountedStores.length === 1 ? 'has' : 'have'} it on clearance`)),
     el('div', { class: 'where' }, icon('pin'),
-      el('div', {}, `Closest: ${storeText(closest)}`, closest.address ? el('small', {}, closest.address) : null,
-        el('div', { class: 'stock-row' }, stockControl(i, result, closest)))),
+      el('div', {}, 'Closest: ', storeLink(closest), closest.address ? el('small', {}, closest.address) : null,
+        el('div', { class: 'stock-row' }, stockControl(i, result, closest), closestButton(i, result)))),
     el('span', { class: 'note-warn' }, `${name} isn't on your plan, so the site hides the price. Check stock on a store to see what it has — and, if the site returns it, the price.${typeof item.postedPrice === 'number' ? ` The post says ${money(item.postedPrice)}.` : ''}`),
     others.length ? el('details', { class: 'more', open: openDetails.has(i) ? true : null, ontoggle: (e) => (e.target.open ? openDetails.add(i) : openDetails.delete(i)) },
       el('summary', {}, `${plural(others.length, 'more store')}`, icon('chevron')),
       el('ul', {}, others.map((s) => el('li', {},
-        el('span', {}, storeText(s)),
-        el('span', { class: 'li-right' }, stockControl(i, result, s), el('b', {}, 'on clearance')))))) : null);
+        storeLink(s),
+        el('span', { class: 'li-right' }, stockControl(i, result, s), result.stock?.[s.id] ? null : el('b', {}, 'on clearance')))))) : null);
 }
 
 function stateBlock(i, state) {
@@ -841,8 +906,15 @@ function renderCard(i, animate = false) {
   const children = [thumb(item, result), infoBlock(item, result)];
   let kind = state.status;
   if (state.status === 'done') {
-    if (result.best) children.push(priceBlock(i, item, result), profitBlock(item, result));
-    else if (result.locked?.discountedStores?.length) children.push(lockedBlock(i, item, result), profitBlock(item, result));
+    const profit = profitOf(i);
+    const tone = profit > 0 ? ' gain' : profit < 0 ? ' loss' : '';
+    if (result.best) {
+      kind += tone;
+      children.push(priceBlock(i, item, result), profitBlock(item, result));
+    } else if (result.locked?.discountedStores?.length) {
+      kind += `${tone} locked`;
+      children.push(lockedBlock(i, item, result), profitBlock(item, result));
+    }
     else {
       kind = 'done nodeal';
       children.push(noDealBlock(item, result));

@@ -64,6 +64,13 @@ Target stores near you have it on clearance", the closest one, and the profit at
 store at a time, since it likely uses a lookup. It's the store's own count, which can be off, so
 call ahead before a long drive.
 
+**Check 3 closest** does the same for the closest stores you haven't checked yet, one after
+another (likely one lookup each). It stops at the first problem, such as running out of lookups.
+Store names open driving directions in Google Maps.
+
+Cards are marked down the left edge: green for a profit, red for a loss. Items with nothing to buy
+shrink to one quiet line so the deals stand out.
+
 "Best near you" only counts stores selling **below** full price. If every nearby store is at full
 price, the row says "Not on clearance near you".
 
