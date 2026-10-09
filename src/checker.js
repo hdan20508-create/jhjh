@@ -471,16 +471,34 @@ export function checkStock(session, { retailer, sku, store, token }) {
     const url = new URL(`${SUPABASE_ORIGIN}/functions/v1/stock-check`);
     url.search = new URLSearchParams({ store, storetype: retailer, sku, token }).toString();
     // Sent from the site's own page, like the site's Scan button.
-    const { status, body } = await page.evaluate(async ({ href, bearer }) => {
-      const res = await fetch(href, { headers: { Authorization: `Bearer ${bearer}` } });
-      let data = null;
-      try { data = await res.json(); } catch { /* not JSON */ }
-      return { status: res.status, body: data };
-    }, { href: url.toString(), bearer: jwt });
+    const href = url.toString();
+    // Playwright sees the response even when the browser hides it from the page (an error reply
+    // without CORS headers shows up there only as "Failed to fetch").
+    const seen = page.waitForResponse((r) => r.url() === href && r.request().method() === 'GET', { timeout: 30000 }).catch(() => null);
+    let status;
+    let body;
+    try {
+      ({ status, body } = await page.evaluate(async ({ href, bearer }) => {
+        const res = await fetch(href, { headers: { Authorization: `Bearer ${bearer}` } });
+        let data = null;
+        try { data = await res.json(); } catch { /* not JSON */ }
+        return { status: res.status, body: data };
+      }, { href, bearer: jwt }));
+    } catch (err) {
+      if (!/Failed to fetch|NetworkError|Load failed/i.test(err.message)) throw err;
+      const res = await seen;
+      if (!res) throw new CheckError('no_answer', 'The site\'s stock check didn\'t answer. It may be busy; try again in a minute.');
+      status = res.status();
+      body = await res.json().catch(() => null);
+    }
 
+    if (status !== 200 || !body) console.log(`[stock] ${retailer} ${sku} store ${store}: error ${status} ${JSON.stringify(body)?.slice(0, 300) ?? ''}`);
+    const reason = typeof body?.error === 'string' ? body.error : typeof body?.message === 'string' ? body.message : null;
     if (status === 429) throw new CheckError('out_of_credits', 'Out of stock checks on the site for now. They come back within about an hour.', { resetAt: new Date(Date.now() + 3600e3).toISOString() });
     if (status === 401) throw new AuthError('needs_login', 'The site didn\'t accept the login. Click "Re-login", then try again.');
     if (status === 403) throw new CheckError('forbidden', 'The site refused this stock check. Your plan may not include it for this store.');
+    if (status === 400) throw new CheckError('stock_rejected', `The site wouldn't check this store${reason ? ` ("${reason.slice(0, 120)}")` : ''}. Re-check the item for a fresh link, then try again.`);
+    if (status >= 500) throw new CheckError('http_error', `The site's stock check failed on its end (error ${status}). Try again in a minute.`);
     if (status !== 200 || !body) throw new CheckError('http_error', `The stock check didn't work (error ${status}). Try again later.`);
     return {
       store,
