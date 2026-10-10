@@ -26,9 +26,9 @@ test('removes token-like fields, JWTs, bearer strings and emails', () => {
 });
 
 test('caps long lists', () => {
-  const out = redact(Array.from({ length: 450 }, (_, i) => i));
-  assert.equal(out.length, 401);
-  assert.match(out[400], /50 more entries/);
+  const out = redact(Array.from({ length: 3050 }, (_, i) => i));
+  assert.equal(out.length, 3001);
+  assert.match(out[3000], /50 more entries/);
 });
 
 test('records site data calls but never login traffic', () => {

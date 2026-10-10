@@ -20,7 +20,8 @@ const KEEP_KEYS = new Set(['itemToken']); // the deal code from the share link, 
 const JWT = /^eyJ[\w-]+\.[\w-]+\.[\w-]+$/;
 const EMAIL = /[^\s@"]+@[^\s@"]+\.[a-z]{2,}/gi;
 const SECRET_PARAMS = /^(access_token|refresh_token|apikey|api_key|code|token_hash|provider_token|session)$/i;
-const MAX_ARRAY = 400;
+// High enough to keep a whole retailer's store list (Home Depot has about 2,000 stores).
+const MAX_ARRAY = 3000;
 
 export function redact(value, key = '') {
   if (SECRET_KEY.test(key) && !KEEP_KEYS.has(key) && value != null && typeof value !== 'object') return '[removed]';
