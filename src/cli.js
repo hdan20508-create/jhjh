@@ -62,7 +62,7 @@ async function check(session, file) {
       const off = r.best?.discountPct != null && r.msrp ? ` (${r.best.discountPct}% off ${money(r.msrp)})` : '';
       const best = r.best
         ? `${money(r.best.price)}${off} at ${r.best.name}${r.best.distanceMi != null ? `, ${r.best.distanceMi} mi` : ''}`
-        : r.locked ? `${r.retailer} isn't on your plan (prices hidden); on clearance at ${r.locked.discountedStores.length} of ${r.locked.checkedStores} nearby store(s)`
+        : r.locked ? `on clearance at ${r.locked.discountedStores.length} of ${r.locked.checkedStores} nearby ${r.retailer} store(s); use Check stock in the app for prices`
           + (r.locked.discountedStores[0] ? `, closest ${r.locked.discountedStores[0].name}${r.locked.discountedStores[0].distanceMi != null ? ` ${r.locked.discountedStores[0].distanceMi} mi` : ''}` : '')
           : r.fullPriceStores ? `not on clearance near you (${r.fullPriceStores} store(s) at full price)` : 'no price inside your radius';
       const profit = r.best && item.resell ? `  est. profit ${money(item.resell.low - r.best.price)}` : '';

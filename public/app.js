@@ -893,7 +893,7 @@ function lockedBlock(i, item, result) {
     el('div', { class: 'where' }, icon('pin'),
       el('div', {}, 'Closest: ', storeLink(closest), closest.address ? el('small', {}, closest.address) : null,
         el('div', { class: 'stock-row' }, stockControl(i, result, closest), closestButton(i, result)))),
-    el('span', { class: 'note-warn' }, `${name} isn't on your plan, so the site hides the price. Check stock on a store to see what it has — and, if the site returns it, the price.${typeof item.postedPrice === 'number' ? ` The post says ${money(item.postedPrice)}.` : ''}`),
+    el('span', { class: 'note-warn' }, `The site's price lookup only says which ${name} stores have it on clearance, not the price. Check stock on a store to get its price and count.${typeof item.postedPrice === 'number' ? ` The post says ${money(item.postedPrice)}.` : ''}`),
     others.length ? el('details', { class: 'more', open: openDetails.has(i) ? true : null, ontoggle: (e) => (e.target.open ? openDetails.add(i) : openDetails.delete(i)) },
       el('summary', {}, `${plural(others.length, 'more store')}`, icon('chevron')),
       el('ul', {}, others.map((s) => el('li', {},
@@ -924,8 +924,8 @@ function noDealBlock(item, result) {
   const name = retailerName(item);
   const text = result.locked
     ? (result.locked.checkedStores
-      ? `Not on clearance at any of the ${plural(result.locked.checkedStores, `${name} store`)} near you. (${name} isn't on your plan, so the site hides prices.)`
-      : `${name} isn't on your plan, so the site hides prices for this item, and it didn't report any ${name} stores near you.`)
+      ? `Not on clearance at any of the ${plural(result.locked.checkedStores, `${name} store`)} near you.`
+      : `The site didn't report any ${name} stores near you for this item.`)
     : result.fullPriceStores ? `Not on clearance near you. ${plural(result.fullPriceStores, 'store')} nearby ${result.fullPriceStores === 1 ? 'has' : 'have'} it at full price.`
       : 'No store inside your radius has a price for this.';
   return el('div', { class: 'state neutral' }, icon('store'), el('span', { class: 'text' }, text));
