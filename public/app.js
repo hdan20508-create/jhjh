@@ -709,21 +709,54 @@ const stockRuns = new Set(); // cards running "Check N closest"
 const CLOSEST_COUNT = 3;
 const openDetails = new Set(); // keep "more stores" open while its stock results come in
 
+// The site's stock pass ("<user>:<sku>:<unix seconds>:<signature>") comes with each price
+// lookup and stops working after about an hour.
+const STOCK_TOKEN_MAX_MIN = 45;
+
+function stockTokenAgeMin(token) {
+  try {
+    const seconds = Number(atob(token.replace(/-/g, '+').replace(/_/g, '/')).split(':')[2]);
+    return Number.isFinite(seconds) ? (Date.now() / 1000 - seconds) / 60 : Infinity;
+  } catch {
+    return Infinity;
+  }
+}
+
+// Looks the item up again (one lookup) to get a fresh stock pass, keeping the stock already found.
+async function refreshItem(i) {
+  const old = batch.states[i].result;
+  const { result } = await api('/api/check', { dealsUrl: batch.items[i].dealsUrl });
+  result.stock = old.stock;
+  batch.states[i] = { status: 'done', result };
+  saveBatch();
+  return result;
+}
+
 async function checkStoreStock(i, storeId) {
   const item = batch.items[i];
-  const { result } = batch.states[i];
   const key = `${i}:${storeId}`;
   if (stockPending.has(key)) return null;
-  if (!result.stockToken) {
-    setMessage('This result is from before stock checks existed. Re-check the item, then try again.', 'warn');
-    return { code: 'no_token' };
-  }
   stockPending.add(key);
   renderCard(i);
   try {
-    const { stock } = await api('/api/stock', {
+    let { result } = batch.states[i];
+    let refreshed = false;
+    if (!result.stockToken || stockTokenAgeMin(result.stockToken) > STOCK_TOKEN_MAX_MIN) {
+      result = await refreshItem(i);
+      refreshed = true;
+    }
+    const ask = () => api('/api/stock', {
       retailer: result.retailer || item.retailer, sku: result.sku || item.sku, store: storeId, token: result.stockToken,
     });
+    let stock;
+    try {
+      ({ stock } = await ask());
+    } catch (err) {
+      // An expired pass can look like any other rejection; get a fresh one and ask once more.
+      if (err.code !== 'stock_rejected' || refreshed) throw err;
+      result = await refreshItem(i);
+      ({ stock } = await ask());
+    }
     result.stock = { ...result.stock, [storeId]: stock };
     saveBatch();
   } catch (err) {
@@ -799,10 +832,11 @@ function stockControl(i, result, store) {
       else if (Math.abs(stock.price - store.price) > 0.01) parts.push(`now ${money(stock.price)}`);
     }
     const tone = stock.inStock > 0 ? 'in' : stock.inStock === 0 ? 'out' : '';
-    return el('span', {
-      class: `stock-chip ${tone}`,
-      title: `Checked ${clock(stock.checkedAt)}. This is the store's own count, which can be off; call ahead before a long drive.`,
-    }, parts.join(' · '));
+    return el('button', {
+      type: 'button', class: `stock-chip recheck ${tone}`, disabled: running,
+      title: `Checked ${clock(stock.checkedAt)}. Click to check again (likely one lookup). This is the store's own count, which can be off; call ahead before a long drive.`,
+      onclick: () => checkStoreStock(i, store.id),
+    }, parts.join(' · '), icon('refresh'));
   }
   return el('button', {
     type: 'button', class: 'stock-btn', disabled: running,

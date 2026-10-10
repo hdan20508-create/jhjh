@@ -64,6 +64,11 @@ Target stores near you have it on clearance", the closest one, and the profit at
 store at a time, since it likely uses a lookup. It's the store's own count, which can be off, so
 call ahead before a long drive.
 
+Click a store's result to check it again. The site's permission for stock checks comes with each
+price lookup and runs out after about an hour, so on an older result the app looks the item up
+again first (one more lookup, and the prices refresh too). If the site still turns a check down,
+it gets a fresh permission once and retries.
+
 **Check 3 closest** does the same for the closest stores you haven't checked yet, one after
 another (likely one lookup each). It stops at the first problem, such as running out of lookups.
 Store names open driving directions in Google Maps.

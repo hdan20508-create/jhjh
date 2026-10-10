@@ -531,6 +531,10 @@ main {
   font: 600 12px var(--sans);
 }
 .stock-chip .spinner { width: 10px; height: 10px; }
+.stock-chip.recheck { border: 0; cursor: pointer; }
+.stock-chip.recheck .icon { width: 11px; height: 11px; opacity: 0.45; }
+.stock-chip.recheck:hover:not(:disabled) .icon { opacity: 1; }
+.stock-chip.recheck:disabled { cursor: not-allowed; }
 .stock-chip.in { background: var(--gain-soft); color: var(--gain); }
 .stock-chip.out { background: var(--loss-soft); color: var(--loss); }
 .li-right { display: inline-flex; align-items: center; gap: 10px; flex-shrink: 0; }
